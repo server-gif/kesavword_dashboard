@@ -33,19 +33,33 @@ const countryName = (code) => {
 // Returns [{ code, name, calls }] biggest first, or null when the geo table is empty.
 export async function countriesFor(prefixCounts) {
   if (!prefixCounts?.size) return [];
+  const db = getEnv().DB;
+  // Cheap probe: when the geo table is empty/missing, skip per-IP lookups entirely. A busy day
+  // has hundreds of /24 prefixes; one D1 query each blows the "too many API requests by single
+  // Worker invocation" limit and stalls the page (this is what made /api/overview return 503).
+  const probe = await db.prepare('SELECT COUNT(*) AS n FROM geo').first().catch(() => null);
+  if (!probe || !probe.n) return null;
+  const v4 = [...prefixCounts].filter(([p]) => p !== 'v6');
   const totals = new Map();
   let any = false;
-  for (const [prefix, calls] of prefixCounts) {
-    let code = 'unknown';
-    if (prefix !== 'v6') {
-      const ip = ipv4ToInt(`${prefix}.1`);
-      if (ip >= 0) {
-        any = true;
-        code = (await countryOf(ip)) || 'unknown';
-        if (code === 'ZZ') code = 'unknown';
-      }
-    }
-    totals.set(code, (totals.get(code) || 0) + calls);
+  const add = (code, calls) => totals.set(code, (totals.get(code) || 0) + calls);
+  // Batch the range lookups (D1 allows up to 100 statements per batch) so the whole country
+  // breakdown costs a handful of API calls instead of hundreds.
+  const CHUNK = 90;
+  for (let i = 0; i < v4.length; i += CHUNK) {
+    const chunk = v4.slice(i, i + CHUNK);
+    const ints = chunk.map(([prefix]) => ipv4ToInt(`${prefix}.1`));
+    const stmts = ints.map((ip) => db.prepare(
+      'SELECT cc FROM geo WHERE start <= ?1 ORDER BY start DESC LIMIT 1'
+    ).bind(ip >= 0 ? ip : -1));
+    const results = await db.batch(stmts).catch(() => null);
+    chunk.forEach(([, calls], j) => {
+      if (ints[j] < 0) return add('unknown', calls);
+      any = true;
+      let code = results?.[j]?.results?.[0]?.cc || 'unknown';
+      if (code === 'ZZ') code = 'unknown';
+      add(code, calls);
+    });
   }
   // geo table not populated yet: report unavailable so the page just hides the country list
   if (!any) return null;
