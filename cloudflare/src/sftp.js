@@ -145,6 +145,24 @@ function makeWrapper(conn, sftp, sock, shared) {
       return buf.subarray(0, offset);
     },
 
+    // Read without pre-checking size via stat — works for symlinks whose target stat can't resolve.
+    async readFile(path) {
+      const handle = await p(sftp.open, path, 'r');
+      try {
+        const chunks = [];
+        const buf = Buffer.alloc(65536);
+        for (;;) {
+          const { bytesRead } = await new Promise((res, rej) =>
+            sftp.read(handle, buf, 0, buf.length, null, (e, n) => (e ? rej(e) : res({ bytesRead: n }))));
+          if (!bytesRead) break;
+          chunks.push(Buffer.from(buf.subarray(0, bytesRead)));
+        }
+        return Buffer.concat(chunks);
+      } finally {
+        await p(sftp.close, handle);
+      }
+    },
+
     // read a byte range (used to tail the PHP error log without pulling the whole file)
     async readRange(path, start, end) {
       const handle = await p(sftp.open, path, 'r');

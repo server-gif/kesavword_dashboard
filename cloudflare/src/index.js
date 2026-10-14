@@ -243,7 +243,17 @@ app.get('/api/list', (c) => withConn(c, async (k) => {
 
 app.get('/api/read', (c) => withConn(c, async (k) => {
   const file = cleanPath(c.req.query('path'));
-  const st = await k.stat(file);
+  let st = await stat(k, file);
+  if (!st) {
+    // stat() follows symlinks — if it fails the path may be a broken/outside-chroot link.
+    const ls = await k.lstat(file).catch(() => null);
+    if (!ls) throw new ApiError(404, 'File not found');
+    // Try reading directly (open+read works even when stat can't resolve the link target).
+    let buf;
+    try { buf = await k.readFile(file); } catch { throw new ApiError(404, 'This symlink\'s target cannot be accessed from the dashboard'); }
+    if (isBinary(buf)) throw new ApiError(415, 'Binary file — cannot edit as text');
+    return c.json({ path: file, content: buf.toString('utf8'), mtime: ls.modifyTime, size: buf.length });
+  }
   if (st.isDirectory) throw new ApiError(400, 'That is a folder');
   if (st.size > MAX_EDIT_BYTES) throw new ApiError(413, 'File is larger than 5 MB — download it instead');
   const buf = await k.get(file);
