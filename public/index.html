@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Server Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235b5bf6'/%3E%3Crect x='5' y='6' width='14' height='5' rx='1.5' fill='white'/%3E%3Crect x='5' y='13' width='14' height='5' rx='1.5' fill='white' opacity='.7'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============ Sign in / setup ============ -->
+<div id="auth" class="auth hidden">
+  <div class="auth-card">
+    <div class="auth-brand">
+      <span class="brand-mark" data-icon="server" data-size="20"></span>
+      <div>
+        <div class="brand-name" id="authBrand"></div>
+      </div>
+    </div>
+    <h1 class="auth-title" id="authTitle">Welcome back</h1>
+    <p class="auth-sub" id="authSub"></p>
+    <form id="authForm" class="auth-form" autocomplete="on">
+      <label class="field setup-only hidden">
+        <span class="field-label">Your name</span>
+        <input class="input" id="authName" autocomplete="name">
+      </label>
+      <label class="field">
+        <span class="field-label">Username</span>
+        <input class="input" id="authUsername" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+        <span class="field-hint setup-only hidden">Letters, numbers or your email — no spaces</span>
+      </label>
+      <label class="field">
+        <span class="field-label">Password</span>
+        <span class="pw-wrap">
+          <input class="input" id="authPassword" type="password" required>
+          <button type="button" class="pw-toggle" id="pwToggle" title="Show password"></button>
+        </span>
+        <span class="field-hint setup-only hidden">At least 8 characters</span>
+      </label>
+      <label class="field setup-only hidden">
+        <span class="field-label">Confirm password</span>
+        <input class="input" id="authConfirm" type="password" autocomplete="new-password">
+      </label>
+      <div class="form-error hidden" id="authError"></div>
+      <button class="btn btn-primary btn-lg" id="authSubmit" type="submit" data-icon="login"><span>Sign in</span></button>
+    </form>
+    <div class="auth-foot" data-icon="shield" data-size="14"><span>Private dashboard · every action is logged</span></div>
+  </div>
+</div>
+
+<!-- ============ App ============ -->
+<div id="app" class="shell hidden">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark" data-icon="server" data-size="18"></span>
+      <div class="brand-text">
+        <div class="brand-name" id="sideBrand"></div>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <div class="nav-label">Workspace</div>
+      <a class="nav-item admin-only" href="#/overview" data-view="overview" data-icon="chart"><span>Overview</span></a>
+      <a class="nav-item" href="#/files" data-view="files" data-icon="folder"><span>Files</span></a>
+      <a class="nav-item" href="#/trash" data-view="trash" data-icon="trash"><span>Recycle Bin</span><span class="nav-badge hidden" id="trashBadge"></span></a>
+      <div class="nav-label admin-only">Owner</div>
+      <a class="nav-item admin-only" href="#/activity" data-view="activity" data-icon="history"><span>Activity</span></a>
+      <a class="nav-item admin-only" href="#/team" data-view="team" data-icon="users"><span>Team</span></a>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="me">
+        <span id="meAvatar"></span>
+        <div class="me-text">
+          <div class="me-name" id="meName"></div>
+          <div class="me-role" id="meRole"></div>
+        </div>
+      </div>
+      <div class="me-actions">
+        <button class="side-btn" id="btnTheme" title="Theme"></button>
+        <button class="side-btn" id="btnPassword" title="Change password" data-icon="key" data-size="17"></button>
+        <button class="side-btn" id="btnLogout" title="Sign out" data-icon="logout" data-size="17"></button>
+      </div>
+    </div>
+  </aside>
+  <div class="sidebar-scrim" id="sidebarScrim"></div>
+
+  <main class="main">
+    <header class="page-head">
+      <button class="icon-btn mobile-only" id="btnMenu" title="Menu" data-icon="menu"></button>
+      <div>
+        <h1 class="page-title" id="pageTitle">Files</h1>
+        <p class="page-sub" id="pageSub"></p>
+      </div>
+    </header>
+
+    <!-- Overview -->
+    <section class="view hidden" id="view-overview">
+      <div class="toolbar">
+        <div class="seg" id="ovPeriod">
+          <button data-p="today" class="active">Today</button>
+          <button data-p="yesterday">Yesterday</button>
+          <button data-p="7d">7 days</button>
+          <button data-p="30d">30 days</button>
+        </div>
+        <span class="ov-range" id="ovRange"></span>
+        <span class="spacer"></span>
+        <span class="ov-updated" id="ovUpdated"></span>
+        <button class="icon-btn" id="ovRefresh" title="Refresh now" data-icon="refresh" data-size="16"></button>
+      </div>
+      <div class="ov-body" id="ovBody">
+        <div class="empty-state"><div class="empty-text">Reading the server logs…</div></div>
+      </div>
+    </section>
+
+    <!-- One API in detail -->
+    <section class="view hidden" id="view-api">
+      <div class="toolbar">
+        <a class="btn btn-sm" href="#/overview" data-icon="back" data-size="14"><span>Overview</span></a>
+        <div class="seg" id="apiPeriod">
+          <button data-p="today" class="active">Today</button>
+          <button data-p="yesterday">Yesterday</button>
+          <button data-p="7d">7 days</button>
+          <button data-p="30d">30 days</button>
+        </div>
+        <span class="ov-range" id="apiRange"></span>
+        <span class="spacer"></span>
+        <span class="ov-updated" id="apiUpdated"></span>
+        <button class="icon-btn" id="apiRefresh" title="Refresh now" data-icon="refresh" data-size="16"></button>
+      </div>
+      <div class="ov-body" id="apiBody"></div>
+    </section>
+
+    <!-- Files -->
+    <section class="view" id="view-files">
+      <div class="files-top">
+        <div class="pathbar">
+          <button class="icon-btn ghost" id="btnUp" title="Up one folder" data-icon="up" data-size="17"></button>
+          <button class="icon-btn ghost" id="btnHome" title="Home folder" data-icon="home" data-size="17"></button>
+          <span class="pathbar-sep"></span>
+          <nav class="crumbs" id="crumbs" title="Click here to type a path"></nav>
+          <input class="path-input mono hidden" id="pathInput" spellcheck="false">
+          <button class="icon-btn ghost" id="btnRefresh" title="Refresh" data-icon="refresh" data-size="16"></button>
+        </div>
+        <label class="search" data-icon="search" data-size="16">
+          <input id="filter" type="search" placeholder="Filter this folder" autocomplete="off">
+        </label>
+      </div>
+
+      <div class="toolbar">
+        <div class="toolbar-group" id="fileActions">
+          <button class="btn btn-primary" id="btnUpload" data-icon="upload" data-size="16"><span>Upload files</span></button>
+          <button class="btn" id="btnUploadDir" data-icon="folderUp" data-size="16"><span>Upload folder</span></button>
+          <button class="btn" id="btnNewFolder" data-icon="folderPlus" data-size="16"><span>New folder</span></button>
+          <button class="btn" id="btnNewFile" data-icon="filePlus" data-size="16"><span>New file</span></button>
+        </div>
+        <div class="selection-bar hidden" id="selectionBar">
+          <span class="sel-count" id="selCount"></span>
+          <button class="btn btn-sm" id="btnClearSel">Clear</button>
+          <button class="btn btn-sm btn-danger" id="btnDeleteSel" data-icon="trash" data-size="15"><span>Delete</span></button>
+        </div>
+        <input type="file" id="fileInput" multiple hidden>
+        <input type="file" id="dirInput" webkitdirectory multiple hidden>
+      </div>
+
+      <div class="progress hidden" id="progress">
+        <span class="progress-icon" data-icon="upload" data-size="16"></span>
+        <div class="progress-body">
+          <div class="progress-row"><span class="progress-label" id="progressLabel"></span><span class="progress-meta" id="progressMeta"></span></div>
+          <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+        </div>
+      </div>
+
+      <div class="card table-card" id="dropZone">
+        <div class="loading-bar hidden" id="filesLoading"></div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th class="cell-check"><input type="checkbox" class="check" id="checkAll"></th>
+              <th data-sort="name">Name</th>
+              <th class="cell-size" data-sort="size">Size</th>
+              <th class="cell-date" data-sort="modified">Modified</th>
+              <th class="cell-perm">Perms</th>
+              <th class="cell-actions"></th>
+            </tr>
+          </thead>
+          <tbody id="fileRows"></tbody>
+        </table>
+        <div class="empty-state hidden" id="filesEmpty"></div>
+        <div class="drop-overlay hidden" id="dropOverlay">
+          <span data-icon="upload" data-size="28"></span>
+          <div>Drop to upload into this folder</div>
+        </div>
+      </div>
+      <div class="table-foot" id="filesFoot"></div>
+    </section>
+
+    <!-- Recycle Bin -->
+    <section class="view hidden" id="view-trash">
+      <div class="toolbar">
+        <div class="note" data-icon="info" data-size="16"><span>Anyone on the team can restore. Only the owner can delete forever.</span></div>
+        <div class="selection-bar hidden" id="trashSelBar">
+          <span class="sel-count" id="trashSelCount"></span>
+          <button class="btn btn-sm" id="btnTrashClearSel">Clear</button>
+          <button class="btn btn-sm" id="btnTrashRestoreSel" data-icon="restore" data-size="15"><span>Restore</span></button>
+          <button class="btn btn-sm btn-danger" id="btnTrashPurgeSel" data-icon="trash" data-size="15"><span>Delete forever</span></button>
+        </div>
+        <button class="btn btn-danger-soft hidden" id="btnEmptyTrash" data-icon="trash" data-size="16"><span>Empty Recycle Bin</span></button>
+      </div>
+      <div class="card table-card">
+        <div class="loading-bar hidden" id="trashLoading"></div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th class="cell-check"><input type="checkbox" class="check" id="trashCheckAll"></th>
+              <th>Name &amp; original folder</th>
+              <th class="cell-size">Size</th>
+              <th>Deleted by</th>
+              <th class="cell-date">Deleted</th>
+              <th>Auto-delete</th>
+              <th class="cell-actions"></th>
+            </tr>
+          </thead>
+          <tbody id="trashRows"></tbody>
+        </table>
+        <div class="empty-state hidden" id="trashEmpty"></div>
+      </div>
+      <div class="table-foot" id="trashFoot"></div>
+    </section>
+
+    <!-- Activity -->
+    <section class="view hidden" id="view-activity">
+      <div class="toolbar">
+        <label class="search grow" data-icon="search" data-size="16">
+          <input id="actSearch" type="search" placeholder="Search by file or folder name" autocomplete="off">
+        </label>
+        <select class="select" id="actUser"><option value="">Everyone</option></select>
+        <select class="select" id="actAction"><option value="">All actions</option></select>
+        <button class="icon-btn" id="actRefresh" title="Refresh" data-icon="refresh" data-size="16"></button>
+      </div>
+      <div class="card table-card">
+        <div class="loading-bar hidden" id="actLoading"></div>
+        <table class="table activity-table">
+          <thead>
+            <tr><th class="cell-time">Time</th><th>Who</th><th>Action</th><th>File</th><th class="cell-actions"></th></tr>
+          </thead>
+          <tbody id="actRows"></tbody>
+        </table>
+        <div class="empty-state hidden" id="actEmpty"></div>
+      </div>
+      <div class="table-foot">
+        <span id="actFoot"></span>
+        <button class="btn btn-sm hidden" id="actMore">Load more</button>
+      </div>
+    </section>
+
+    <!-- Team -->
+    <section class="view hidden" id="view-team">
+      <div class="toolbar">
+        <div class="note" data-icon="shield" data-size="16"><span>Only you can see this page. Members can manage files but can't see Team or Activity.</span></div>
+        <button class="btn btn-primary" id="btnAddMember" data-icon="userPlus" data-size="16"><span>Add member</span></button>
+      </div>
+      <div class="card table-card">
+        <div class="loading-bar hidden" id="teamLoading"></div>
+        <table class="table">
+          <thead>
+            <tr><th>Member</th><th>Role</th><th>Status</th><th class="cell-date">Last sign-in</th><th class="cell-date">Added</th><th class="cell-actions"></th></tr>
+          </thead>
+          <tbody id="teamRows"></tbody>
+        </table>
+      </div>
+      <div class="table-foot" id="teamFoot"></div>
+    </section>
+  </main>
+</div>
+
+<!-- ============ Editor ============ -->
+<div class="overlay overlay-full hidden" id="editorModal">
+  <div class="sheet">
+    <div class="sheet-head">
+      <div class="sheet-title" id="editorTitle"></div>
+      <span class="dirty hidden" id="editorDirty">Unsaved</span>
+      <span class="spacer"></span>
+      <span class="lang-chip" id="editorLang"></span>
+      <button class="btn" id="editorCopyUrl" data-icon="link" data-size="15"><span>Copy URL</span></button>
+      <button class="btn" id="editorTest" title="Run this API and see the response (⌘↵ sends)" data-icon="play" data-size="15"><span>Test</span></button>
+      <button class="btn" id="editorSaveOnly" title="Save and keep editing (⌘S)" data-icon="save" data-size="15"><span>Save</span><kbd>⌘S</kbd></button>
+      <button class="btn btn-primary" id="editorSave" title="Check, save and close the file" data-icon="check" data-size="15"><span>Save &amp; Close</span></button>
+      <button class="icon-btn" id="editorClose" title="Close" data-icon="x"></button>
+    </div>
+    <div class="sheet-split">
+      <div class="sheet-col">
+        <div class="sheet-body" id="editorHost"></div>
+        <div class="problems hidden" id="editorProblems"></div>
+      </div>
+
+      <!-- API tester -->
+      <aside class="test-panel hidden" id="testPanel">
+        <div class="tp-head">
+          <span class="tp-title" data-icon="play" data-size="15"><span>Test API</span></span>
+          <span class="spacer"></span>
+          <button class="icon-btn ghost sm" id="tpReset" title="Reset to defaults" data-icon="refresh" data-size="15"></button>
+          <button class="icon-btn ghost sm" id="tpClose" title="Close test panel" data-icon="x" data-size="16"></button>
+        </div>
+        <div class="tp-request">
+          <div class="tp-urlrow">
+            <select class="select tp-method" id="tpMethod">
+              <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
+            </select>
+            <input class="input mono tp-url" id="tpUrl" spellcheck="false" autocomplete="off">
+            <button class="btn btn-primary" id="tpSend" data-icon="play" data-size="14"><span id="tpSendLabel">Send</span></button>
+          </div>
+          <div class="tp-detect hidden" id="tpDetect"></div>
+          <div class="tp-warns" id="tpWarns"></div>
+          <div class="tp-tabs" role="tablist">
+            <button class="tp-tab active" data-tab="params" id="tpTabParams">Params</button>
+            <button class="tp-tab" data-tab="body" id="tpTabBody">Body</button>
+            <button class="tp-tab" data-tab="headers" id="tpTabHeaders">Headers</button>
+          </div>
+          <div class="tp-pane" data-pane="params">
+            <div class="tp-hint" id="tpParamsHint"></div>
+            <div class="kv" id="tpParams"></div>
+          </div>
+          <div class="tp-pane hidden" data-pane="body">
+            <div class="seg" id="tpBodyType">
+              <button data-type="form" class="active">Form fields</button>
+              <button data-type="json">JSON</button>
+            </div>
+            <div class="tp-hint" id="tpBodyHint"></div>
+            <div class="kv" id="tpForm"></div>
+            <textarea class="input mono tp-json hidden" id="tpJson" spellcheck="false" placeholder='{ "user_id": 1 }'></textarea>
+          </div>
+          <div class="tp-pane hidden" data-pane="headers">
+            <div class="tp-hint">Extra request headers, e.g. Authorization.</div>
+            <div class="kv" id="tpHeaders"></div>
+          </div>
+        </div>
+        <div class="tp-response" id="tpResponse">
+          <div class="tp-empty" id="tpEmpty">Press <b>Send</b> (or ⌘↵) to run this API. Unsaved changes are saved first.</div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Diff viewer ============ -->
+<div class="overlay overlay-full hidden" id="diffModal">
+  <div class="sheet">
+    <div class="sheet-head">
+      <div class="sheet-title" id="diffTitle"></div>
+      <span class="diff-meta" id="diffMeta"></span>
+      <span class="spacer"></span>
+      <span class="diff-legend"><span class="lg lg-old">Before</span><span class="lg lg-new">After</span></span>
+      <button class="btn" id="diffRevert" data-icon="restore" data-size="15"><span>Restore old version</span></button>
+      <button class="icon-btn" id="diffClose" title="Close" data-icon="x"></button>
+    </div>
+    <div class="sheet-body" id="diffHost"></div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>

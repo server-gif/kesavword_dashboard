@@ -1,0 +1,19 @@
+{
+  "name": "server_dashboard",
+  "version": "1.0.0",
+  "description": "Local web dashboard to manage server files over SFTP",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^18.0.7",
+    "express": "^5.3.0",
+    "multer": "^2.4.0",
+    "ssh2-sftp-client": "^12.1.1"
+  }
+}
