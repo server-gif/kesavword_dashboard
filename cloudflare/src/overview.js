@@ -8,7 +8,7 @@ const posix = {
   dirname: (p) => { const i = p.lastIndexOf('/'); return i <= 0 ? '/' : p.slice(0, i); },
 };
 const DAY = 86400000;
-const PERIODS = ['today', 'yesterday', '7d', '30d'];
+const PERIODS = ['today', 'yesterday', '7d', '30d', 'custom'];
 
 function zonedParts(ms, timezone) {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -29,14 +29,34 @@ function localDayStart(ms, timezone) {
   return guess - offsetMinutes(guess, timezone) * 60000;
 }
 
+// "YYYY-MM-DD" -> ms at that date's midnight in the site timezone. Returns null if malformed.
+function dayStartStr(dateStr, timezone) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || ''));
+  if (!m) return null;
+  const guess = Date.UTC(+m[1], +m[2] - 1, +m[3]);
+  return guess - offsetMinutes(guess, timezone) * 60000;
+}
+
 const awkKey = (ms) => new Date(ms).toISOString().replace(/[-:T]/g, '').slice(0, 14);
 const parseKey = (k) => (/^\d{14}$/.test(k || '')
   ? Date.UTC(+k.slice(0, 4), +k.slice(4, 6) - 1, +k.slice(6, 8), +k.slice(8, 10), +k.slice(10, 12), +k.slice(12, 14))
   : null);
 
-function periodWindow(period, timezone, now = Date.now()) {
+function periodWindow(period, timezone, now = Date.now(), custom = null) {
   const today = localDayStart(now, timezone);
   const daysBack = (n) => localDayStart(today - n * DAY + 12 * 3600000, timezone);
+  if (period === 'custom' && custom) {
+    const cf = dayStartStr(custom.from, timezone);
+    const ct = dayStartStr(custom.to, timezone);
+    if (cf != null && ct != null) {
+      const earliest = daysBack(30);                    // older days have no rotated log left to read
+      let a = Math.max(Math.min(cf, ct), earliest);     // tolerate a swapped range, clamp to retained logs
+      let b = Math.min(Math.max(cf, ct), today + DAY);  // don't go beyond today
+      if (b - a > 31 * DAY) b = a + 31 * DAY;           // cap span at 31 days
+      const buckets = Math.round((b - a) / DAY) || 1;
+      return { from: a, to: b, size: 86400, buckets, compare: null };
+    }
+  }
   switch (period) {
     case 'yesterday':
       return { from: daysBack(1), to: today, size: 3600, buckets: 24, compare: null };
@@ -320,11 +340,11 @@ async function markMissing(c, paths, home, cap = 150) {
   }
 }
 
-// ctx carries: c (connection), home, accessLog, webLog, errorLog, rootDir, toRootPath, timezone, period
+// ctx carries: c (connection), home, accessLog, webLog, errorLog, rootDir, toRootPath, timezone, period, custom
 async function buildOverview(ctx) {
-  const { c, home, accessLog, errorLog, rootDir, toRootPath, timezone, period } = ctx;
+  const { c, home, accessLog, errorLog, rootDir, toRootPath, timezone, period, custom } = ctx;
   const now = Date.now();
-  const win = periodWindow(period, timezone, now);
+  const win = periodWindow(period, timezone, now, custom);
   const multiDay = win.size === 86400;
   const scanFrom = win.compare ? Math.min(win.from, win.compare.from) : win.from;
   const [main, errText] = await Promise.all([
@@ -399,10 +419,10 @@ async function buildOverview(ctx) {
 }
 
 async function buildApiDetail(ctx) {
-  const { c, home, accessLog, webLog, errorLog, rootDir, toRootPath, timezone, period, script } = ctx;
+  const { c, home, accessLog, webLog, errorLog, rootDir, toRootPath, timezone, period, script, custom } = ctx;
   if (!SAFE_PATH.test(script)) throw new Error('This API path has characters that cannot be analysed');
   const now = Date.now();
-  const win = periodWindow(period, timezone, now);
+  const win = periodWindow(period, timezone, now, custom);
   const apiPath = rootDir === '/' ? script : posix.join(rootDir, script);
 
   const scanFrom = win.compare ? Math.min(win.from, win.compare.from) : win.from;

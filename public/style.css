@@ -631,6 +631,8 @@ a.name:hover .name-text { color: var(--accent); }
 .ov-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 14px; padding-bottom: 8px; transition: opacity .15s; }
 .ov-body.refreshing { opacity: .55; }
 .ov-range { font-size: 13px; color: var(--text-2); }
+.ov-custom { padding: 8px 12px; }
+.ov-custom[hidden] { display: none; }
 .ov-updated { font-size: 12.5px; color: var(--text-3); }
 .ov-sub { font-size: 12.5px; color: var(--text-3); margin-top: -4px; }
 

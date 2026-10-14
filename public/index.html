@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="/datepicker/DateRangePicker.css">
 </head>
 <body>
 
@@ -106,12 +107,14 @@
           <button data-p="yesterday">Yesterday</button>
           <button data-p="7d">7 days</button>
           <button data-p="30d">30 days</button>
+          <button data-p="custom">Custom</button>
         </div>
         <span class="ov-range" id="ovRange"></span>
         <span class="spacer"></span>
         <span class="ov-updated" id="ovUpdated"></span>
         <button class="icon-btn" id="ovRefresh" title="Refresh now" data-icon="refresh" data-size="16"></button>
       </div>
+      <div id="ovCustom" class="ov-custom" hidden></div>
       <div class="ov-body" id="ovBody">
         <div class="empty-state"><div class="empty-text">Reading the server logs…</div></div>
       </div>
@@ -126,6 +129,7 @@
           <button data-p="yesterday">Yesterday</button>
           <button data-p="7d">7 days</button>
           <button data-p="30d">30 days</button>
+          <button data-p="custom">Custom</button>
         </div>
         <span class="ov-range" id="apiRange"></span>
         <span class="spacer"></span>

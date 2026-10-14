@@ -1,0 +1,218 @@
+.drp {
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  color: #333;
+  display: inline-flex;
+  gap: 12px;
+  padding: 10px 12px 12px;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.175);
+}
+.drp *,
+.drp *::before,
+.drp *::after { box-sizing: border-box; }
+
+/* ----- presets ----- */
+.drp-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 184px;
+  flex-shrink: 0;
+}
+.drp-preset {
+  text-align: left;
+  font: inherit;
+  font-size: 16px;
+  color: #08c;
+  background: #f5f5f5;
+  border: 1px solid #f5f5f5;
+  border-radius: 4px;
+  padding: 6px 16px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.drp-preset:hover,
+.drp-preset.active {
+  background: #08c;
+  border-color: #08c;
+  color: #fff;
+}
+
+/* ----- from / to panels ----- */
+.drp-main { display: flex; flex-direction: column; }
+.drp-panels { display: flex; gap: 14px; }
+.drp-side { width: 330px; }
+
+.drp-box {
+  border: 1px solid #eee;
+  border-radius: 4px;
+}
+.drp-box-title {
+  text-align: center;
+  font-weight: bold;
+  font-size: 16px;
+  margin: 4px 0 6px;
+}
+
+.drp-input-group {
+  display: flex;
+  height: 38px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  overflow: hidden;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.drp-input-group:focus-within {
+  border-color: #66afe9;
+  box-shadow: 0 0 6px rgba(102, 175, 233, 0.6);
+}
+.drp-input-addon {
+  width: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #eee;
+  border-right: 1px solid #ccc;
+  color: #555;
+}
+.drp-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  padding: 0 16px;
+  font: inherit;
+  font-size: 17px;
+  color: #555;
+  background: #fff;
+}
+
+.drp-select {
+  font: inherit;
+  font-size: 16px;
+  color: #333;
+  padding: 1px 4px;
+  background: #fff;
+  border: 1px solid #aaa;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+/* ----- calendar ----- */
+.drp-cal { margin-top: 14px; }
+.drp-cal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.drp-cal-selects { display: flex; gap: 4px; }
+.drp-month { width: 116px; }
+.drp-year { width: 70px; }
+.drp-nav {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  color: #000;
+  cursor: pointer;
+}
+.drp-nav:hover:not(:disabled) { background: #eee; }
+.drp-nav:disabled { opacity: 0.25; cursor: default; }
+
+.drp-grid {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.drp-grid th {
+  height: 32px;
+  font-size: 16px;
+  font-weight: normal;
+  text-align: center;
+}
+.drp-grid td {
+  height: 38px;
+  text-align: center;
+  font-size: 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+.drp-grid td:hover { background: #eee; }
+.drp-grid td.off {
+  color: #ddd;
+  cursor: default;
+  background: none;
+}
+.drp-grid td.disabled {
+  color: #ccc;
+  cursor: not-allowed;
+  background: none;
+}
+.drp-grid td.in-range {
+  background: #ebf4f8;
+  border-radius: 0;
+}
+.drp-grid td.active,
+.drp-grid td.active:hover {
+  background: #357ebd;
+  color: #fff;
+  border-radius: 4px;
+}
+
+.drp-status {
+  height: 26px;
+  margin-top: 4px;
+  text-align: center;
+  font-size: 16px;
+  line-height: 26px;
+}
+.drp-dot {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: #22c11f;
+  vertical-align: -1px;
+}
+
+/* ----- footer ----- */
+.drp-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+.drp-maxdate { font-size: 12px; margin-right: 4px; }
+.drp-btn {
+  font: inherit;
+  font-size: 16px;
+  padding: 7px 14px;
+  border: 1px solid;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.drp-apply { background: #5cb85c; border-color: #4cae4c; color: #fff; }
+.drp-apply:hover { background: #449d44; border-color: #398439; }
+.drp-cancel { background: #fff; border-color: #ccc; color: #333; }
+.drp-cancel:hover { background: #e6e6e6; border-color: #adadad; }
+
+/* ----- small screens ----- */
+@media (max-width: 900px) {
+  .drp { flex-direction: column; width: 100%; max-width: 380px; }
+  .drp-presets { flex-direction: row; flex-wrap: wrap; width: 100%; }
+  .drp-preset { font-size: 14px; padding: 5px 10px; }
+  .drp-panels { flex-direction: column; }
+  .drp-side { width: 100%; }
+  .drp-footer { flex-wrap: wrap; }
+}

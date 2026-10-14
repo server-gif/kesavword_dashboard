@@ -5,12 +5,16 @@ import {
   compact, num, ms, setZone, bucketLabels, periodText, columnChart, chartCard, simpleTable,
   sparkline, tile, delta, statusLine, trendBadge, countryCard,
 } from './charts.js';
+import DateRangePicker from './datepicker.js';
 
-export const PERIODS = ['today', 'yesterday', '7d', '30d'];
+export const PERIODS = ['today', 'yesterday', '7d', '30d', 'custom'];
 export const VS = { today: 'yesterday at this time', '7d': 'the 7 days before' };
 
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const state = {
   period: PERIODS.includes(storeGet('ovPeriod')) ? storeGet('ovPeriod') : 'today',
+  from: DATE_RE.test(storeGet('ovFrom')) ? storeGet('ovFrom') : '',
+  to: DATE_RE.test(storeGet('ovTo')) ? storeGet('ovTo') : '',
   data: null,
   loading: false,
   sort: { key: 'requests', dir: -1 },
@@ -21,8 +25,11 @@ const state = {
   hideProbes: true,
 };
 let timer = null;
+let picker = null;
 
 export const currentPeriod = () => state.period;
+// A custom range only applies while the Overview is in custom mode; API detail reuses it.
+export const currentRange = () => (state.period === 'custom' && state.from && state.to ? { from: state.from, to: state.to } : null);
 export function setPeriod(p) {
   if (!PERIODS.includes(p)) return;
   state.period = p;
@@ -35,6 +42,7 @@ export async function showOverview() {
   clearInterval(timer);
   timer = setInterval(() => { if (isVisible() && state.period !== 'yesterday' && !document.hidden) load(false); }, 120000);
   renderPeriod();
+  if (state.period === 'custom') openCustomPanel();
   await load(false);
 }
 
@@ -44,8 +52,10 @@ async function load(fresh) {
   $('ovBody').classList.add('refreshing'); // keep the previous render, dimmed, while refetching
   $('ovRefresh').disabled = true;
   const wanted = state.period;
+  const range = currentRange();
+  const rangeQs = range ? `&from=${range.from}&to=${range.to}` : '';
   try {
-    const data = await api('GET', `/api/overview?period=${wanted}${fresh ? '&fresh=1' : ''}`, null, { timeoutMs: 45000 });
+    const data = await api('GET', `/api/overview?period=${wanted}${rangeQs}${fresh ? '&fresh=1' : ''}`, null, { timeoutMs: 45000 });
     if (wanted === state.period) {
       state.data = data;
       render();
@@ -63,6 +73,8 @@ async function load(fresh) {
 
 function renderPeriod() {
   document.querySelectorAll('#ovPeriod button').forEach((b) => b.classList.toggle('active', b.dataset.p === state.period));
+  const panel = $('ovCustom');
+  if (panel) panel.hidden = state.period !== 'custom';
 }
 
 // ---------- page ----------
@@ -380,7 +392,28 @@ document.querySelectorAll('#ovPeriod button').forEach((b) => {
     setPeriod(b.dataset.p);
     state.showAll = false;
     renderPeriod();
+    if (b.dataset.p === 'custom') openCustomPanel();
     load(false);
   };
 });
 $('ovRefresh').onclick = () => load(true);
+
+function openCustomPanel() {
+  const panel = $('ovCustom');
+  if (!panel) return;
+  panel.hidden = false;
+  if (!picker) {
+    picker = new DateRangePicker(panel, {
+      max: new Date(),
+      format: 'DD-MM-YYYY',
+      onApply: ({ from, to }) => {
+        state.from = from; state.to = to;
+        storeSet('ovFrom', from); storeSet('ovTo', to);
+        load(true);
+      },
+      onCancel: () => { $('ovCustom').hidden = true; },
+    });
+  }
+  // Pre-fill from saved state
+  if (state.from && state.to) picker.setRange(state.from, state.to);
+}

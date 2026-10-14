@@ -717,8 +717,17 @@ async function serveSummary(c, key, period, build) {
 }
 
 const pickPeriod = (p) => (PERIODS.includes(p) ? p : 'today');
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// period=custom is honoured only when both from and to are real dates; otherwise fall back to a preset.
+function resolvePeriod(raw, fromStr, toStr) {
+  if (raw === 'custom' && DATE_RE.test(fromStr || '') && DATE_RE.test(toStr || '')) {
+    return { period: 'custom', custom: { from: fromStr, to: toStr } };
+  }
+  return { period: pickPeriod(raw), custom: null };
+}
+const periodKey = ({ period, custom }) => (period === 'custom' ? `custom|${custom.from}|${custom.to}` : period);
 
-function buildOverviewCtx(c, k, home, period) {
+function buildOverviewCtx(c, k, home, period, custom) {
   return async () => {
     const logs = await findLogs(k, rootDir(), cfg());
     if (!logs?.access) {
@@ -726,7 +735,7 @@ function buildOverviewCtx(c, k, home, period) {
     }
     return buildOverview({
       c: k, home, accessLog: logs.access, webLog: logs.web, errorLog: await findErrorLog(k, rootDir(), cfg()),
-      rootDir: rootDir(), toRootPath: (f) => toRootPath(f), timezone: (cfg().TIMEZONE || 'Asia/Kolkata').trim(), period,
+      rootDir: rootDir(), toRootPath: (f) => toRootPath(f), timezone: (cfg().TIMEZONE || 'Asia/Kolkata').trim(), period, custom,
     });
   };
 }
@@ -740,25 +749,26 @@ function toRootPath(serverFile) {
 
 app.get('/api/overview', async (c) => {
   const d = adminOnly(c); if (d) return d;
-  const period = pickPeriod(c.req.query('period'));
+  const { period, custom } = resolvePeriod(c.req.query('period'), c.req.query('from'), c.req.query('to'));
+  const key = `overview|${periodKey({ period, custom })}`;
   // The SSH connection is opened only inside `build`, i.e. only on a cache miss.
-  const data = await serveSummary(c, `overview|${period}`, period,
-    () => withConn(c, (k) => buildOverviewCtx(c, k, getEnv().__home || '/', period)()));
+  const data = await serveSummary(c, key, period,
+    () => withConn(c, (k) => buildOverviewCtx(c, k, getEnv().__home || '/', period, custom)()));
   const ignored = await store.getSetting('ignored', {});
   return c.json({ ...data, ignored: Object.values(ignored) });
 });
 
 app.get('/api/overview/api', async (c) => {
   const d = adminOnly(c); if (d) return d;
-  const period = pickPeriod(c.req.query('period'));
+  const { period, custom } = resolvePeriod(c.req.query('period'), c.req.query('from'), c.req.query('to'));
   const script = String(c.req.query('script') || '');
   if (!script.startsWith('/')) throw new ApiError(400, 'Which API?');
   const ignored = await store.getSetting('ignored', {});
-  const data = await serveSummary(c, `api|${period}|${script}`, period, () => withConn(c, async (k) => {
+  const data = await serveSummary(c, `api|${periodKey({ period, custom })}|${script}`, period, () => withConn(c, async (k) => {
     const logs = await findLogs(k, rootDir(), cfg());
     return buildApiDetail({
       c: k, home: getEnv().__home || '/', accessLog: logs?.access, webLog: logs?.web, errorLog: await findErrorLog(k, rootDir(), cfg()),
-      rootDir: rootDir(), toRootPath: (f) => toRootPath(f), timezone: (cfg().TIMEZONE || 'Asia/Kolkata').trim(), period, script,
+      rootDir: rootDir(), toRootPath: (f) => toRootPath(f), timezone: (cfg().TIMEZONE || 'Asia/Kolkata').trim(), period, script, custom,
     });
   }));
   return c.json({ ...data, ignored: ignored[script] || null, url: c.env.SITE_URL ? c.env.SITE_URL + script : null });

@@ -2,7 +2,7 @@
 import { $, h, api, toast, icon, publicUrl, copyWithFeedback, displayPath, session } from './lib.js';
 import { openEditorAt } from './editor.js';
 import { toggleTester } from './test.js';
-import { VS, currentPeriod, setPeriod, setIgnored, phpErrorList } from './overview.js';
+import { VS, currentPeriod, currentRange, setPeriod, setIgnored, phpErrorList } from './overview.js';
 import {
   compact, num, ms, setZone, bucketLabels, periodText, columnChart, chartCard, simpleTable, barList, tile, delta, statusLine, countryCard,
 } from './charts.js';
@@ -40,7 +40,9 @@ async function load(fresh) {
       h('div', { class: 'empty-text' }, period === '7d' || period === '30d' ? 'Going through many days of logs can take a few seconds.' : 'One moment.')));
   } else body.classList.add('refreshing');
   try {
-    const data = await api('GET', `/api/overview/api?period=${period}&script=${encodeURIComponent(state.script)}${fresh ? '&fresh=1' : ''}`, null, { timeoutMs: 45000 });
+    const range = currentRange();
+    const rangeQs = range ? `&from=${range.from}&to=${range.to}` : '';
+    const data = await api('GET', `/api/overview/api?period=${period}${rangeQs}&script=${encodeURIComponent(state.script)}${fresh ? '&fresh=1' : ''}`, null, { timeoutMs: 45000 });
     if (seq !== state.seq) return;
     state.data = data;
     render();
