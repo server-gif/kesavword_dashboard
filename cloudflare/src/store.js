@@ -37,6 +37,25 @@ export async function setSetting(key, value) {
     .bind(key, JSON.stringify(value)).run();
 }
 
+// ---------- summary cache (overview / api detail) ----------
+// The in-isolate Map in index.js is L1; D1 is L2 so a warm result survives a cold isolate or a
+// different colocation, and a cache HIT returns in a few ms WITHOUT opening an SFTP connection.
+// A dedicated table lets the cron prune stale rows by timestamp (api-detail keys are per-script).
+export async function readCache(key) {
+  const row = await db().prepare('SELECT at, data FROM cache WHERE key = ?1').bind(key).first();
+  if (!row) return null;
+  try { return { at: row.at, data: JSON.parse(row.data) }; } catch { return null; }
+}
+
+export async function writeCache(key, rec) {
+  await db().prepare('INSERT INTO cache (key, at, data) VALUES (?1, ?2, ?3) ON CONFLICT(key) DO UPDATE SET at = ?2, data = ?3')
+    .bind(key, rec.at, JSON.stringify(rec.data)).run();
+}
+
+export async function purgeCache(olderThan) {
+  await db().prepare('DELETE FROM cache WHERE at < ?1').bind(olderThan).run();
+}
+
 // ---------- activity log ----------
 
 export async function logActivity(user, action, fields = {}, diff = null) {

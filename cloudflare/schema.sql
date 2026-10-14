@@ -36,6 +36,15 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
+-- Overview / API-detail summaries (L2 cache). Kept out of `settings` so the cron can prune
+-- stale rows by timestamp; lets a cold isolate serve a warm result without touching SFTP.
+CREATE TABLE IF NOT EXISTS cache (
+  key TEXT PRIMARY KEY,
+  at INTEGER NOT NULL,
+  data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cache_at ON cache (at);
+
 CREATE TABLE IF NOT EXISTS geo (
   start INTEGER PRIMARY KEY,
   "end" INTEGER NOT NULL,

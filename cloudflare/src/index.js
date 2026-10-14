@@ -684,23 +684,26 @@ function cachedSummary(key, build) {
   if (!summaryInFlight.has(key)) {
     summaryInFlight.set(key, (async () => {
       const data = await build();
-      summaryCache.set(key, { at: Date.now(), data });
+      const rec = { at: Date.now(), data };
+      summaryCache.set(key, rec);
       if (summaryCache.size > 60) summaryCache.delete(summaryCache.keys().next().value);
+      store.writeCache(key, rec).catch(() => {}); // persist so other isolates/colos skip the build
       return data;
     })().finally(() => summaryInFlight.delete(key)));
   }
   return summaryInFlight.get(key);
 }
 
-function serveSummary(c, key, period, build) {
+async function serveSummary(c, key, period, build) {
   const fresh = c.req.query('fresh') === '1';
   const maxAge = period === 'today' ? (fresh ? 10000 : 60000) : period === 'yesterday' ? 30 * 60000 : (fresh ? 30000 : 10 * 60000);
-  const cached = summaryCache.get(key);
-  if (cached && Date.now() - cached.at < maxAge) return Promise.resolve(cached.data);
-  if (cached && !fresh) {
-    cachedSummary(key, build).catch(() => {});
-    return Promise.resolve(cached.data);
-  }
+  const now = Date.now();
+  const mem = summaryCache.get(key);
+  if (mem && now - mem.at < maxAge) return mem.data;                 // L1 hit — no D1, no SSH
+  const disk = await store.readCache(key).catch(() => null);
+  if (disk && now - disk.at < maxAge) { summaryCache.set(key, disk); return disk.data; } // L2 hit
+  const stale = mem && (!disk || mem.at >= disk.at) ? mem : disk;
+  if (stale && !fresh) { cachedSummary(key, build).catch(() => {}); return stale.data; } // serve stale, refresh behind
   return cachedSummary(key, build);
 }
 
@@ -729,10 +732,9 @@ function toRootPath(serverFile) {
 app.get('/api/overview', async (c) => {
   const d = adminOnly(c); if (d) return d;
   const period = pickPeriod(c.req.query('period'));
-  const data = await withConn(c, (k) => {
-    const home = getEnv().__home || '/';
-    return serveSummary(c, `overview|${period}`, period, buildOverviewCtx(c, k, home, period));
-  });
+  // The SSH connection is opened only inside `build`, i.e. only on a cache miss.
+  const data = await serveSummary(c, `overview|${period}`, period,
+    () => withConn(c, (k) => buildOverviewCtx(c, k, getEnv().__home || '/', period)()));
   const ignored = await store.getSetting('ignored', {});
   return c.json({ ...data, ignored: Object.values(ignored) });
 });
@@ -743,17 +745,13 @@ app.get('/api/overview/api', async (c) => {
   const script = String(c.req.query('script') || '');
   if (!script.startsWith('/')) throw new ApiError(400, 'Which API?');
   const ignored = await store.getSetting('ignored', {});
-  const data = await withConn(c, (k) => {
-    const home = getEnv().__home || '/';
-    const key = `api|${period}|${script}`;
-    return serveSummary(c, key, period, async () => {
-      const logs = await findLogs(k, rootDir(), cfg());
-      return buildApiDetail({
-        c: k, home, accessLog: logs?.access, webLog: logs?.web, errorLog: await findErrorLog(k, rootDir(), cfg()),
-        rootDir: rootDir(), toRootPath: (f) => toRootPath(f), timezone: (cfg().TIMEZONE || 'Asia/Kolkata').trim(), period, script,
-      });
+  const data = await serveSummary(c, `api|${period}|${script}`, period, () => withConn(c, async (k) => {
+    const logs = await findLogs(k, rootDir(), cfg());
+    return buildApiDetail({
+      c: k, home: getEnv().__home || '/', accessLog: logs?.access, webLog: logs?.web, errorLog: await findErrorLog(k, rootDir(), cfg()),
+      rootDir: rootDir(), toRootPath: (f) => toRootPath(f), timezone: (cfg().TIMEZONE || 'Asia/Kolkata').trim(), period, script,
     });
-  });
+  }));
   return c.json({ ...data, ignored: ignored[script] || null, url: c.env.SITE_URL ? c.env.SITE_URL + script : null });
 });
 
@@ -897,19 +895,20 @@ export default {
     setEnv(env);
     ctx.waitUntil((async () => {
       await purgeExpired().catch(() => {});
-      // refresh today's summary so the owner's home page opens instantly
+      await store.purgeCache(Date.now() - 12 * 3600000).catch(() => {}); // drop stale L2 rows
+      // Rebuild today's summary and persist it to D1 (via cachedSummary) so the owner's home
+      // page opens instantly even on a brand-new/cold isolate that has no in-memory cache yet.
       try {
-        await withSftp(env, async (k) => {
+        await cachedSummary('overview|today', () => withSftp(env, async (k) => {
           const home = (await k.cwd().catch(() => '/'));
           env.__home = home;
           const logs = await findLogs(k, rootDir(), env);
-          if (logs?.access) {
-            await buildOverview({
-              c: k, home, accessLog: logs.access, webLog: logs.web, errorLog: await findErrorLog(k, rootDir(), env),
-              rootDir: rootDir(), toRootPath: (f) => toRootPath(f), timezone: (env.TIMEZONE || 'Asia/Kolkata').trim(), period: 'today',
-            });
-          }
-        });
+          if (!logs?.access) return { unavailable: true, reason: 'The server log folder could not be read. Try Refresh in a moment.' };
+          return buildOverview({
+            c: k, home, accessLog: logs.access, webLog: logs.web, errorLog: await findErrorLog(k, rootDir(), env),
+            rootDir: rootDir(), toRootPath: (f) => toRootPath(f), timezone: (env.TIMEZONE || 'Asia/Kolkata').trim(), period: 'today',
+          });
+        }));
       } catch {}
     })());
   },

@@ -4,9 +4,9 @@
 // net.connect internally) cannot be used. This module drives the lower-level `ssh2` Client
 // directly, feeding it a Node Duplex that wraps a cloudflare:sockets TCP connection.
 //
-// A fresh SSH connection is opened per Worker request (isolates freeze between requests, so
-// a pooled connection would be dead). It exposes the small subset of the ssh2-sftp-client API
-// the dashboard uses, so the rest of the code reads almost unchanged.
+// The handshake is the CPU-heavy part on Workers (pure-JS). A fresh SSH connection is opened
+// per request and torn down after — reusing one connection across concurrent requests deadlocks
+// ssh2's channel handling (the runtime then reports the request as "hung").
 //
 // ⚠ RISK: ssh2's pure-JavaScript crypto (no native cpu-features on Workers) is CPU-heavy and
 // may hit the Worker CPU-time limit on a busy handshake. Validate with `wrangler dev` before
@@ -45,9 +45,6 @@ const isConnError = (err) => /handshake|socket|closed|reset|econn|timeout|aborte
 );
 
 // Open an authenticated SSH connection (no SFTP session yet) and resolve to { conn, sock }.
-// The handshake is the CPU-heavy part on Workers (pure-JS DH/AES), so the connection is
-// cached and reused across requests in the same isolate; each request opens its own cheap
-// SFTP session over it. A dead connection is detected on error and re-opened once.
 function openConnectionEntry(env) {
   return new Promise((resolve, reject) => {
     const raw = connect({ hostname: env.SFTP_HOST, port: Number(env.SFTP_PORT || 22) }, { allowCustomCertificate: true });
@@ -57,14 +54,15 @@ function openConnectionEntry(env) {
     const fail = (err) => { if (!settled) { settled = true; try { conn.end(); } catch {} reject(err); } };
     conn.on('ready', () => { settled = true; resolve({ conn, sock, at: Date.now(), alive: true }); });
     conn.on('error', fail);
-    conn.on('close', () => { if (cached && cached.conn === conn) cached = null; });
     conn.connect({
       sock,
       username: env.SFTP_USER,
       ...(env.SFTP_KEY ? { privateKey: env.SFTP_KEY } : { password: env.SFTP_PASS }),
       readyTimeout: 25000,
-      keepaliveInterval: 15000,
       algorithms: {
+        // The server accepts curve25519, but the Workers/workerd runtime cannot derive its
+        // shared secret (node:crypto X25519 is unavailable to ssh2 here), so we must use the
+        // finite-field DH groups. curve25519 stays last purely as a never-matched guard.
         kex: ['diffie-hellman-group14-sha256', 'diffie-hellman-group-exchange-sha256', 'diffie-hellman-group16-sha512', 'curve25519-sha256'],
         cipher: ['aes128-ctr', 'aes256-ctr', 'aes128-gcm@openssh.com', 'aes256-gcm@openssh.com'],
       },
@@ -73,22 +71,6 @@ function openConnectionEntry(env) {
 }
 
 const openSession = (conn) => new Promise((res, rej) => conn.sftp((err, sftp) => (err ? rej(err) : res(sftp))));
-
-// One shared, authenticated connection per isolate (reused until it dies or goes stale).
-let cached = null;
-const invalidate = (entry) => {
-  if (cached === entry) cached = null;
-  entry.alive = false;
-  try { entry.conn.end(); } catch {}
-  try { entry.sock.destroy(); } catch {}
-};
-async function getEntry(env) {
-  if (cached && cached.alive && Date.now() - cached.at < 4 * 60000) return cached;
-  if (cached) invalidate(cached);
-  const entry = await openConnectionEntry(env);
-  cached = entry;
-  return entry;
-}
 
 // Promisified sftp primitives the dashboard needs, under the ssh2-sftp-client method names.
 function makeWrapper(conn, sftp, sock, shared) {
@@ -231,9 +213,9 @@ function makeWrapper(conn, sftp, sock, shared) {
   };
 }
 
-// Open a fresh authenticated connection + SFTP session per call and tear it down after.
-// (A shared/pooled connection is unsafe here: concurrent requests racing on one SSH Client
-// cause "No response from server" 500s when one request tears the connection down mid-flight.)
+// Open a fresh authenticated connection + SFTP session per request and tear it down after.
+// (Reusing a connection across concurrent requests deadlocks ssh2's channel handling, so we
+// never pool — the cheap KEX above is what keeps the per-request handshake fast instead.)
 async function withSftp(env, fn) {
   const entry = await openConnectionEntry(env);
   try {

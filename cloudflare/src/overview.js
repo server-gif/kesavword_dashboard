@@ -290,9 +290,34 @@ const shapeCompare = (cmp) => (cmp?.totals?.requests ? {
 
 const stripTimes = (errs) => errs.map(({ times, ...rest }) => rest);
 
-async function markMissing(c, paths, cap = 150) {
+async function markMissing(c, paths, home, cap = 150) {
   const unique = [...new Set(paths.filter(Boolean))].slice(0, cap);
-  return new Map(await Promise.all(unique.map(async (p) => [p, !(await c.stat(p).catch(() => null))])));
+  if (!unique.length) return new Map();
+  // One SSH round-trip instead of up to ~700 SFTP stat() calls: feed every path to a shell loop
+  // that reports E(xists)/M(issing). Paths come via stdin and are matched with `[ -e "$f" ]`
+  // (read -r does not re-expand, so odd characters in a path are safe). Falls back to per-path
+  // stat() if the exec output is short/unparseable, so the result is never silently wrong.
+  const pre = home === '/' ? '$HOME' : '';
+  try {
+    const out = await c.exec(
+      `while IFS= read -r f; do if [ -e "${pre}$f" ]; then printf 'E\\t%s\\n' "$f"; else printf 'M\\t%s\\n' "$f"; fi; done`,
+      unique.join('\n') + '\n'
+    );
+    const lines = out.stdout.split('\n').filter(Boolean);
+    if (lines.length === unique.length) {
+      const result = new Map();
+      for (const line of lines) {
+        const i = line.indexOf('\t');
+        if (i < 0) throw new Error('bad markMissing output');
+        result.set(line.slice(i + 1), line.slice(0, i) === 'M');
+      }
+      if (result.size === unique.length) return result;
+      throw new Error('markMissing count mismatch');
+    }
+    throw new Error('markMissing incomplete');
+  } catch {
+    return new Map(await Promise.all(unique.map(async (p) => [p, !(await c.stat(p).catch(() => null))])));
+  }
 }
 
 // ctx carries: c (connection), home, accessLog, webLog, errorLog, rootDir, toRootPath, timezone, period
@@ -340,7 +365,7 @@ async function buildOverview(ctx) {
   const minCalls = { today: 5, yesterday: 5, '7d': 10, '30d': 20 }[period] || 5;
   const mostly4xx = apis.filter((a) => a.errors4xx >= a.requests * 0.9);
   const parents = [...new Set(mostly4xx.map((a) => posix.dirname(a.path)).filter((p) => p !== rootDir))];
-  const parentMissing = await markMissing(c, parents, 400);
+  const parentMissing = await markMissing(c, parents, home, 400);
   for (const a of mostly4xx) {
     const parent = posix.dirname(a.path);
     const inSiteFolder = parent !== rootDir && parentMissing.get(parent) === false;
@@ -350,7 +375,7 @@ async function buildOverview(ctx) {
   const missing = await markMissing(c, [
     ...phpErrors.map((e) => e.path),
     ...mostly4xx.filter((a) => !a.probe).map((a) => a.path),
-  ], 300);
+  ], home, 300);
   for (const a of apis) if (missing.has(a.path)) a.missing = missing.get(a.path);
   for (const e of phpErrors) if (missing.has(e.path)) e.missing = missing.get(e.path);
 
@@ -389,7 +414,7 @@ async function buildApiDetail(ctx) {
   const compare = main.compare;
   const countries = await countriesFor(main.geo);
   const phpErrors = parseErrorLog(errText, toRootPath, win.from, win.to).filter((e) => e.path === apiPath);
-  const exists = !(await markMissing(c, [apiPath])).get(apiPath);
+  const exists = !(await markMissing(c, [apiPath], home)).get(apiPath);
   const t = main.totals;
   return {
     period, timezone, script, path: apiPath, exists, from: win.from,
@@ -403,11 +428,22 @@ async function buildApiDetail(ctx) {
   };
 }
 
+// The log dir is listed by both findLogs and findErrorLog within one build — same connection,
+// same directory. Memoize per connection so that fan-out costs a single SFTP round-trip.
+const listMemo = new WeakMap();
+function listDirOnce(c, dir) {
+  let byDir = listMemo.get(c);
+  if (!byDir) { byDir = new Map(); listMemo.set(c, byDir); }
+  let p = byDir.get(dir);
+  if (!p) { p = c.list(dir); byDir.set(dir, p); }
+  return p;
+}
+
 async function findLogs(c, rootDir, env) {
   const dir = posix.join(posix.dirname(rootDir), 'logs');
   let names;
   try {
-    names = (await c.list(dir)).map((f) => f.name);
+    names = (await listDirOnce(c, dir)).map((f) => f.name);
   } catch (err) {
     if (env.ACCESS_LOG) names = [];
     else { console.error('Could not read the log folder:', err.message); return null; }
@@ -423,7 +459,7 @@ async function findErrorLog(c, rootDir, env) {
   if (env.ERROR_LOG) return env.ERROR_LOG.trim();
   const dir = posix.join(posix.dirname(rootDir), 'logs');
   try {
-    const logs = (await c.list(dir)).filter((f) => f.type === '-' && /\.error\.log$/.test(f.name));
+    const logs = (await listDirOnce(c, dir)).filter((f) => f.type === '-' && /\.error\.log$/.test(f.name));
     const pick = logs.find((f) => /^backend_/.test(f.name)) || logs.find((f) => /php/i.test(f.name)) || logs.sort((a, b) => b.modifyTime - a.modifyTime)[0];
     return pick ? posix.join(dir, pick.name) : null;
   } catch {
