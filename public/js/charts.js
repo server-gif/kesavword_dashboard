@@ -20,7 +20,7 @@ export function bucketLabels(bucket, start) {
 }
 
 export function periodText(d) {
-  const kind = { today: 'Today', yesterday: 'Yesterday', '7d': 'Last 7 days', '30d': 'Last 30 days', custom: 'Custom range' }[d.period];
+  const kind = { today: 'Today', yesterday: 'Yesterday', '7d': 'Last 7 days', '30d': 'Last 30 days', custom: 'Regular' }[d.period];
   if (d.bucket === 'day') return `${kind}: ${dayLabel(d.from)} – ${dayLabel(d.to)}`;
   return `${longDay(d.from)}, ${timeLabel(d.from)} – ${d.period === 'yesterday' ? 'midnight' : timeLabel(d.to)}`;
 }

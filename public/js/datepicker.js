@@ -116,10 +116,8 @@ export default class DateRangePicker {
   }
 
   render() {
-    const now = new Date();
     this.root.replaceChildren(
-      this._presets(),
-      el('div', 'drp-main', this._panels(now), this._footer())
+      el('div', 'drp-main', this._panels(), this._footer())
     );
   }
 
