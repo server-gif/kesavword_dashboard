@@ -44,28 +44,26 @@ const isConnError = (err) => /handshake|socket|closed|reset|econn|timeout|aborte
   `${err?.code || ''} ${err?.message || ''}`
 );
 
-// Open an SSH connection and attach an SFTP session; resolves to a wrapper `c`.
-function openConnection(env) {
+// Open an authenticated SSH connection (no SFTP session yet) and resolve to { conn, sock }.
+// The handshake is the CPU-heavy part on Workers (pure-JS DH/AES), so the connection is
+// cached and reused across requests in the same isolate; each request opens its own cheap
+// SFTP session over it. A dead connection is detected on error and re-opened once.
+function openConnectionEntry(env) {
   return new Promise((resolve, reject) => {
     const raw = connect({ hostname: env.SFTP_HOST, port: Number(env.SFTP_PORT || 22) }, { allowCustomCertificate: true });
     const sock = toDuplex(raw);
     const conn = new Client();
     let settled = false;
     const fail = (err) => { if (!settled) { settled = true; try { conn.end(); } catch {} reject(err); } };
-    conn.on('ready', () => {
-      conn.sftp((err, sftp) => {
-        if (err) return fail(err);
-        settled = true;
-        resolve(makeWrapper(conn, sftp, sock));
-      });
-    });
+    conn.on('ready', () => { settled = true; resolve({ conn, sock, at: Date.now(), alive: true }); });
     conn.on('error', fail);
+    conn.on('close', () => { if (cached && cached.conn === conn) cached = null; });
     conn.connect({
       sock,
       username: env.SFTP_USER,
       ...(env.SFTP_KEY ? { privateKey: env.SFTP_KEY } : { password: env.SFTP_PASS }),
       readyTimeout: 25000,
-      keepaliveInterval: 0,
+      keepaliveInterval: 15000,
       algorithms: {
         kex: ['diffie-hellman-group14-sha256', 'diffie-hellman-group-exchange-sha256', 'diffie-hellman-group16-sha512', 'curve25519-sha256'],
         cipher: ['aes128-ctr', 'aes256-ctr', 'aes128-gcm@openssh.com', 'aes256-gcm@openssh.com'],
@@ -74,8 +72,26 @@ function openConnection(env) {
   });
 }
 
+const openSession = (conn) => new Promise((res, rej) => conn.sftp((err, sftp) => (err ? rej(err) : res(sftp))));
+
+// One shared, authenticated connection per isolate (reused until it dies or goes stale).
+let cached = null;
+const invalidate = (entry) => {
+  if (cached === entry) cached = null;
+  entry.alive = false;
+  try { entry.conn.end(); } catch {}
+  try { entry.sock.destroy(); } catch {}
+};
+async function getEntry(env) {
+  if (cached && cached.alive && Date.now() - cached.at < 4 * 60000) return cached;
+  if (cached) invalidate(cached);
+  const entry = await openConnectionEntry(env);
+  cached = entry;
+  return entry;
+}
+
 // Promisified sftp primitives the dashboard needs, under the ssh2-sftp-client method names.
-function makeWrapper(conn, sftp, sock) {
+function makeWrapper(conn, sftp, sock, shared) {
   const p = (fn, ...args) => new Promise((res, rej) => fn.call(sftp, ...args, (e, v) => (e ? rej(e) : res(v))));
 
   const rights = (mode) => {
@@ -207,17 +223,26 @@ function makeWrapper(conn, sftp, sock) {
     chmod: (path, mode) => p(sftp.chmod, path, mode),
     async exists(path) { return !!await this.stat(path).catch(() => null); },
 
-    end() { try { conn.end(); } catch {} try { sock.destroy(); } catch {} },
+    end() {
+      // Shared: only close this request's SFTP session, keep the connection for the next one.
+      if (shared) { try { sftp.destroy && sftp.destroy(); } catch {} return; }
+      try { conn.end(); } catch {} try { sock.destroy(); } catch {}
+    },
   };
 }
 
-// Per-request connection, torn down when the response finishes.
+// Open a fresh authenticated connection + SFTP session per call and tear it down after.
+// (A shared/pooled connection is unsafe here: concurrent requests racing on one SSH Client
+// cause "No response from server" 500s when one request tears the connection down mid-flight.)
 async function withSftp(env, fn) {
-  const c = await openConnection(env);
+  const entry = await openConnectionEntry(env);
   try {
+    const sftp = await openSession(entry.conn);
+    const c = makeWrapper(entry.conn, sftp, entry.sock, false);
     return await fn(c);
   } finally {
-    c.end();
+    try { entry.conn.end(); } catch {}
+    try { entry.sock.destroy(); } catch {}
   }
 }
 
@@ -239,7 +264,7 @@ async function readTextIfSmall(env, path, maxBytes) {
 export {
   withSftp,
   withSftpWrite,
-  openConnection,
+  openConnectionEntry,
   isBinary,
   readTextIfSmall,
   isConnError,

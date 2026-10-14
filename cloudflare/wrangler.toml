@@ -26,6 +26,11 @@ not_found_handling = "single-page-application"
 # recycle-bin auto-purge + overview warm cache (same job the local server did on its timer)
 crons = ["*/30 * * * *"]
 
+# Raise the per-invocation CPU budget (paid plans only; the free tier ignores/rejects this).
+# The pure-JS SSH handshake + overview parsing is CPU-heavy, so the default limit causes 503s.
+[limits]
+allowed_cpu_ms = 30000
+
 # Non-secret settings (same names as in .env). Secrets (SFTP_PASS, AUTH_SECRET) go in:
 #   .dev.vars  for local testing  — see .dev.vars.example
 #   wrangler secret put <NAME>    before the first deploy
