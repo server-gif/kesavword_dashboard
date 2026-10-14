@@ -1,0 +1,45 @@
+# Cloudflare Worker build of the Server Dashboard.
+# The UI (public/) is served as static assets; the API runs in src/index.js.
+
+name = "kesavword-dashboard"
+main = "dist/worker.mjs"
+compatibility_date = "2025-06-01"
+# nodejs_compat gives the Worker Node built-ins (Buffer, stream, zlib) and cloudflare:sockets,
+# which the SSH/SFTP connection uses. ssh2 runs in its pure-JavaScript crypto mode.
+compatibility_flags = ["nodejs_compat"]
+
+# Pre-bundle with esbuild (stubs ssh2's optional native cpu-features binary) before upload.
+[build]
+command = "node tools/build.mjs"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dashboard-data"
+database_id = "080a209e-4ab1-42ec-8b41-a4888d65f497"
+
+[assets]
+directory = "../public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[triggers]
+# recycle-bin auto-purge + overview warm cache (same job the local server did on its timer)
+crons = ["*/30 * * * *"]
+
+# Non-secret settings (same names as in .env). Secrets (SFTP_PASS, AUTH_SECRET) go in:
+#   .dev.vars  for local testing  — see .dev.vars.example
+#   wrangler secret put <NAME>    before the first deploy
+
+[vars]
+SFTP_HOST = "159.89.161.137"
+SFTP_PORT = "22"
+SFTP_USER = "master_qdwphqeydv"
+ROOT_DIR = "/applications/wkqgagvcde/public_html"
+SITE_NAME = "KesavWord Server"
+SITE_URL = "http://kesavword.xyz"
+TIMEZONE = "Asia/Kolkata"
+TRASH_DIR = ""
+# ACCESS_LOG = ""
+# WEB_ACCESS_LOG = ""
+# ERROR_LOG = ""
+# PHP_VERSION = ""

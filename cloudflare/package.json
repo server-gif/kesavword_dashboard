@@ -1,0 +1,23 @@
+{
+  "name": "kesavword-dashboard-worker",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Cloudflare Worker port of the Server Dashboard (same UI, same API, no local files)",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "d1:execute": "wrangler d1 execute dashboard-data --local --file",
+    "export:geo": "node tools/export-geo.mjs",
+    "export:data": "node tools/export-data.mjs"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.5.0",
+    "hono": "^4.6.0",
+    "ssh2": "^1.16.0",
+    "ssh2-sftp-client": "^12.1.1"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

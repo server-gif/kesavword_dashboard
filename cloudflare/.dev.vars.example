@@ -1,0 +1,5 @@
+# Copy to .dev.vars for local testing (npx wrangler dev). NEVER commit .dev.vars.
+# Same values as your root .env file.
+SFTP_PASS=your-sftp-password
+# Any random 32+ char string; signs session cookies (in production: wrangler secret put AUTH_SECRET)
+AUTH_SECRET=change-me-to-a-long-random-string

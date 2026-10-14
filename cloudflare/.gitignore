@@ -1,0 +1,11 @@
+node_modules/
+.wrangler/
+.dev.vars
+sql/
+dist/
+devtrace.txt
+dev.log
+dev.err
+_auth.txt
+_pass.txt
+_body.json
