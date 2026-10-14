@@ -27,7 +27,8 @@ not_found_handling = "single-page-application"
 crons = ["*/30 * * * *"]
 
 # Raise the per-invocation CPU budget (paid plans only; the free tier ignores/rejects this).
-# The pure-JS SSH handshake + overview parsing is CPU-heavy, so the default limit causes 503s.
+# The pure-JS SSH handshake + overview log parsing is CPU-heavy; 30s is the paid-plan ceiling,
+# which keeps /api/overview well within limits (free tier's small budget caused error 1102 / 503).
 [limits]
 allowed_cpu_ms = 30000
 

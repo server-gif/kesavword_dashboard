@@ -6,6 +6,8 @@ dist/
 devtrace.txt
 dev.log
 dev.err
+tail.log
+gencookie.mjs
 _auth.txt
 _pass.txt
 _body.json
