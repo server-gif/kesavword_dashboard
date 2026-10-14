@@ -15,7 +15,7 @@ command = "node tools/build.mjs"
 [[d1_databases]]
 binding = "DB"
 database_name = "dashboard-data"
-database_id = "080a209e-4ab1-42ec-8b41-a4888d65f497"
+database_id = "b00d4190-3258-44be-946d-449424fc015c"
 
 [assets]
 directory = "../public"
