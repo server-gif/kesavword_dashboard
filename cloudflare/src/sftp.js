@@ -131,8 +131,8 @@ function makeWrapper(conn, sftp, sock, shared) {
       if (st.size === 0) return Buffer.alloc(0);
       const buf = Buffer.alloc(st.size);
       const handle = await p(sftp.open, path, 'r');
+      let offset = 0;
       try {
-        let offset = 0;
         while (offset < st.size) {
           const { bytesRead } = await new Promise((res, rej) =>
             sftp.read(handle, buf, offset, st.size - offset, offset, (e, n) => (e ? rej(e) : res({ bytesRead: n }))));
