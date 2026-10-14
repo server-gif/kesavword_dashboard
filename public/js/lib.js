@@ -217,12 +217,32 @@ export function avatar(name = '?', username = '', size = 'md') {
 
 // ---------- api ----------
 
-export async function api(method, url, body) {
-  const res = await fetch(url, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+export async function api(method, url, body, opts = {}) {
+  let signal = opts.signal;
+  let timer = null;
+  if (!signal && opts.timeoutMs) {
+    const ac = new AbortController();
+    signal = ac.signal;
+    timer = setTimeout(() => ac.abort(), opts.timeoutMs);
+  }
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+      signal,
+    });
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      const e = new Error('The server is still catching up — try again in a moment.');
+      e.aborted = true;
+      throw e;
+    }
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && !url.startsWith('/api/login') && !url.startsWith('/api/session')) {
     window.dispatchEvent(new Event('session-expired'));

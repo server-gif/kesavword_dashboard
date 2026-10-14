@@ -703,7 +703,16 @@ async function serveSummary(c, key, period, build) {
   const disk = await store.readCache(key).catch(() => null);
   if (disk && now - disk.at < maxAge) { summaryCache.set(key, disk); return disk.data; } // L2 hit
   const stale = mem && (!disk || mem.at >= disk.at) ? mem : disk;
-  if (stale && !fresh) { cachedSummary(key, build).catch(() => {}); return stale.data; } // serve stale, refresh behind
+  // A multi-day rescan is CPU-heavy (30 gzipped logs over a pure-JS SSH handshake). Forcing it to
+  // block the response — which is what an explicit refresh used to do — hangs the request and can
+  // starve the whole isolate, freezing every panel. Serve what we already have and rebuild in the
+  // background instead; only a genuine cold miss (nothing cached at all) is allowed to block.
+  const expensive = period === '7d' || period === '30d';
+  if (stale && (!fresh || expensive)) {
+    const pending = cachedSummary(key, build).catch(() => {});
+    try { c.executionCtx?.waitUntil(pending); } catch {} // keep the rebuild alive after we respond
+    return stale.data;
+  }
   return cachedSummary(key, build);
 }
 

@@ -45,7 +45,7 @@ async function load(fresh) {
   $('ovRefresh').disabled = true;
   const wanted = state.period;
   try {
-    const data = await api('GET', `/api/overview?period=${wanted}${fresh ? '&fresh=1' : ''}`);
+    const data = await api('GET', `/api/overview?period=${wanted}${fresh ? '&fresh=1' : ''}`, null, { timeoutMs: 45000 });
     if (wanted === state.period) {
       state.data = data;
       render();
