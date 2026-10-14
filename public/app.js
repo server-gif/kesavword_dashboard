@@ -2,10 +2,10 @@
 import { $, api, toast, icon, hydrateIcons, avatar, formModal, session, isAdmin, storeGet, storeSet } from './js/lib.js';
 import { loadMonaco, syncMonacoTheme, editorIsDirty } from './js/editor.js';
 import { showFiles } from './js/files.js';
-import { showTrash } from './js/trash.js';
-import { showActivity } from './js/activity.js';
+import { showTrash, resetTrash } from './js/trash.js';
+import { showActivity, resetActivity } from './js/activity.js';
 import { showTeam } from './js/team.js';
-import { showOverview } from './js/overview.js';
+import { showOverview, resetOverview } from './js/overview.js';
 import { showApiDetail } from './js/apidetail.js';
 
 hydrateIcons();
@@ -114,19 +114,13 @@ window.addEventListener('session-expired', () => {
 // ---------- app shell ----------
 
 const VIEWS = {
-  overview: { title: 'Overview', sub: () => `How your APIs are doing${session.info.url ? ` on ${session.info.url.replace(/^https?:\/\//, '')}` : ''}`, show: () => showOverview(), admin: true },
+  overview: { title: 'Overview', sub: () => `How your APIs are doing${session.info.url ? ` on ${session.info.url.replace(/^https?:\/\//, '')}` : ''}`, show: () => showOverview(), reset: () => resetOverview(), admin: true },
   api: { title: 'API details', sub: () => '', show: (params) => showApiDetail(params), admin: true, nav: 'overview' },
-  files: { title: 'Files', sub: () => (session.info.url ? `Website files of ${session.info.url.replace(/^https?:\/\//, '')}` : `Everything inside ${session.info.home}`), show: (params) => showFiles(params.get('path') || lastPathInsideRoot() || session.info.home) },
-  trash: { title: 'Recycle Bin', sub: () => `Deleted items are kept for ${session.info.trashDays} days, then removed forever automatically.`, show: () => showTrash() },
-  activity: { title: 'Activity', sub: () => 'Every change made by you and your team, newest first.', show: () => showActivity(), admin: true },
+  files: { title: 'Files', sub: () => (session.info.url ? `Website files of ${session.info.url.replace(/^https?:\/\//, '')}` : `Everything inside ${session.info.home}`), show: (params) => showFiles(params.get('path') || session.info.home) },
+  trash: { title: 'Recycle Bin', sub: () => `Deleted items are kept for ${session.info.trashDays} days, then removed forever automatically.`, show: () => showTrash(), reset: () => resetTrash() },
+  activity: { title: 'Activity', sub: () => 'Every change made by you and your team, newest first.', show: () => showActivity(), reset: () => resetActivity(), admin: true },
   team: { title: 'Team', sub: () => 'People who can sign in to this dashboard.', show: () => showTeam(), admin: true },
 };
-
-function lastPathInsideRoot() {
-  const last = storeGet('lastPath');
-  const root = session.info.home;
-  return last && (root === '/' || last === root || last.startsWith(root + '/')) ? last : null;
-}
 
 async function startApp() {
   try {
@@ -159,6 +153,8 @@ window.addEventListener('trash-changed', async () => {
   try { setTrashBadge((await api('GET', '/api/trash')).items.length); } catch {}
 });
 
+let lastViewName = null;
+
 function route() {
   if (!session.user) return;
   const [rawName, qs] = location.hash.replace(/^#\/?/, '').split('?');
@@ -167,6 +163,11 @@ function route() {
   if (VIEWS[name].admin && !isAdmin()) name = 'files';
   const view = VIEWS[name];
 
+  // A genuine sidebar section change: reset the view so it opens fresh instead of
+  // resuming filters, scroll or selections left over from the previous visit.
+  const switching = name !== lastViewName;
+  lastViewName = name;
+
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${name}`));
   document.querySelectorAll('.nav-item').forEach((a) => a.classList.toggle('active', a.dataset.view === (view.nav || name)));
   $('pageTitle').textContent = view.title;
@@ -174,6 +175,11 @@ function route() {
   document.title = `${view.title} · ${session.info.name || 'Server Dashboard'}`;
   // (views that know better, like API details, set their own title and subtitle when they render)
   $('sidebar').classList.remove('open');
+  if (switching) {
+    view.reset?.();
+    const sec = $(`view-${name}`);
+    sec?.querySelectorAll('.ov-body, .table-card').forEach((el) => { el.scrollTop = 0; });
+  }
   view.show(new URLSearchParams(qs || ''));
 }
 

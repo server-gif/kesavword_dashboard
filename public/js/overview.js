@@ -46,6 +46,16 @@ export async function showOverview() {
   await load(false);
 }
 
+// Clear the in-view UI state so switching back to Overview starts clean. The chosen period
+// is a deliberate persisted setting and stays as-is (load() refetches for it).
+export function resetOverview() {
+  state.filter = '';
+  state.showAll = false;
+  state.showIgnored = false;
+  state.showProbes = false;
+  state.hideProbes = true;
+}
+
 async function load(fresh) {
   if (state.loading) return;
   state.loading = true;

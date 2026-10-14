@@ -19,6 +19,11 @@ export async function showTrash() {
   }
 }
 
+// Drop any leftover checkbox selection so switching back to the Recycle Bin starts clean.
+export function resetTrash() {
+  state.selected.clear();
+}
+
 function render() {
   const admin = isAdmin();
   $('trashRows').replaceChildren(...state.items.map((item) => {

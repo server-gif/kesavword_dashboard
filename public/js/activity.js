@@ -61,6 +61,15 @@ export async function showActivity(append = false) {
   }
 }
 
+// Reset the filter controls so switching back to Activity shows the full, newest log again.
+export function resetActivity() {
+  state.items = [];
+  state.total = 0;
+  $('actSearch').value = '';
+  $('actUser').value = '';
+  $('actAction').value = '';
+}
+
 function dayLabel(ts) {
   const d = new Date(ts);
   const today = new Date();
