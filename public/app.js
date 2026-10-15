@@ -23,7 +23,7 @@ function applyTheme() {
   root.dataset.resolvedTheme = pref === 'system' ? (media.matches ? 'dark' : 'light') : pref;
   const btn = $('btnTheme');
   btn.replaceChildren(icon({ system: 'monitor', light: 'sun', dark: 'moon' }[pref], 17));
-  btn.title = `Theme: ${pref}`;
+  btn.dataset.tip = `Theme: ${pref}`;
   syncMonacoTheme();
 }
 media.addEventListener('change', applyTheme);
@@ -211,6 +211,21 @@ $('btnPassword').onclick = () => formModal({
 
 $('btnMenu').onclick = () => $('sidebar').classList.toggle('open');
 $('sidebarScrim').onclick = () => $('sidebar').classList.remove('open');
+
+// ---------- sidebar collapse (desktop) ----------
+
+function applySidebar() {
+  const collapsed = storeGet('sideCollapsed') === '1';
+  $('app').classList.toggle('collapsed', collapsed);
+  const tip = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  const t = $('btnSidebarToggle');
+  if (t) { t.dataset.tip = tip; t.setAttribute('aria-label', tip); }
+}
+$('btnSidebarToggle').onclick = () => {
+  storeSet('sideCollapsed', $('app').classList.contains('collapsed') ? '0' : '1');
+  applySidebar();
+};
+applySidebar();
 
 // ---------- boot ----------
 
