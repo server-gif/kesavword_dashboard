@@ -55,8 +55,8 @@ function periodWindow(period, timezone, now = Date.now(), custom = null, maxDays
       // Honour the requested range as-is; only clamp to the window the server can still read
       // (rotated logs older than this are gone) and to "not beyond today". No artificial span cap.
       const earliest = daysBack(maxDays);
-      const a = Math.max(Math.min(cf, ct), earliest);   // tolerate a swapped range
-      const b = Math.min(Math.max(cf, ct), today + DAY); // don't go beyond today
+      const a = Math.max(Math.min(cf, ct), earliest);        // tolerate a swapped range
+      const b = Math.min(Math.max(cf, ct) + DAY, today + DAY); // include the whole 'to' day (window is [a,b)), never beyond today
       const buckets = Math.max(1, Math.round((b - a) / DAY));
       return { from: a, to: b, size: 86400, buckets, compare: null };
     }
