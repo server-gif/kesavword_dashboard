@@ -12,7 +12,7 @@ export const VS = { today: 'yesterday at this time', '7d': 'the 7 days before' }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const state = {
-  period: PERIODS.includes(storeGet('ovPeriod')) ? storeGet('ovPeriod') : 'today',
+  period: 'today',
   from: DATE_RE.test(storeGet('ovFrom')) ? storeGet('ovFrom') : '',
   to: DATE_RE.test(storeGet('ovTo')) ? storeGet('ovTo') : '',
   data: null,
@@ -46,14 +46,17 @@ export async function showOverview() {
   await load(false);
 }
 
-// Clear the in-view UI state so switching back to Overview starts clean. The chosen period
-// is a deliberate persisted setting and stays as-is (load() refetches for it).
+// Clear the in-view UI state so switching back to Overview starts clean: the period falls
+// back to Today (the saved custom range is kept so the picker need not be re-filled).
 export function resetOverview() {
+  state.period = 'today';
   state.filter = '';
   state.showAll = false;
   state.showIgnored = false;
   state.showProbes = false;
   state.hideProbes = true;
+  const panel = $('ovCustom');
+  if (panel) panel.hidden = true;
 }
 
 async function load(fresh) {
