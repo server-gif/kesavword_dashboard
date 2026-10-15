@@ -420,11 +420,11 @@ function openCustomPanel() {
     picker = new DateRangePicker(panel, {
       max: new Date(),
       format: 'DD-MM-YYYY',
-      // A preset that maps to a dashboard period uses it (so Today keeps its hourly view,
-      // 7d/30d their comparisons); any other preset or a manual range becomes the custom period.
-      onApply: ({ period, from, to }) => {
-        if (period && PERIODS.includes(period)) {
-          setPeriod(period);
+      // A named preset maps back to the dashboard's period (so Today keeps its hourly view,
+      // 7d/30d their comparisons); a manually picked range becomes the custom period.
+      onApply: ({ preset, from, to }) => {
+        if (preset && preset !== 'custom' && PERIODS.includes(preset)) {
+          setPeriod(preset);
         } else {
           state.from = from; state.to = to;
           storeSet('ovFrom', from); storeSet('ovTo', to);
