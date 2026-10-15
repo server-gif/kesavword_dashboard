@@ -73,6 +73,8 @@ export default class DateRangePicker {
     this.format = opts.format || 'DD-MM-YYYY';
     this.onApply = opts.onApply || (() => {});
     this.onCancel = opts.onCancel || (() => {});
+    // When true, clicking a side preset applies it at once (one-click), like quick period buttons.
+    this.applyOnPreset = opts.applyOnPreset || false;
 
     this.start = this.min || new Date();
     this.end = this.max || new Date();
@@ -268,6 +270,7 @@ export default class DateRangePicker {
       this.leftView = startOfMonth(s); this.rightView = startOfMonth(e);
     }
     this.render();
+    if (this.applyOnPreset && p.calc) this._apply();
   }
 
   _pickDay(d) {
