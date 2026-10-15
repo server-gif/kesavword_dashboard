@@ -9,7 +9,7 @@ import DateRangePicker from './datepicker.js';
 
 export const PERIODS = ['today', 'yesterday', '7d', '30d', 'custom'];
 export const VS = { today: 'yesterday at this time', '7d': 'the 7 days before' };
-const PERIOD_LABEL = { today: 'Today', yesterday: 'Yesterday', '7d': '7 days', '30d': '30 days', custom: 'Custom range' };
+export const PERIOD_LABEL = { today: 'Today', yesterday: 'Yesterday', '7d': '7 days', '30d': '30 days', custom: 'Custom range' };
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const state = {
@@ -35,6 +35,22 @@ export function setPeriod(p) {
   if (!PERIODS.includes(p)) return;
   state.period = p;
   storeSet('ovPeriod', p);
+}
+
+// Apply a DateRangePicker result to the shared period state. A named preset maps back to the
+// dashboard's period (so Today keeps its hourly view, 7d/30d their comparisons); a manually
+// picked range becomes the custom period. Overview and API detail share this so the same
+// calendar drives both views.
+export function applyRange({ preset, from, to }) {
+  if (preset && preset !== 'custom' && PERIODS.includes(preset)) {
+    setPeriod(preset);
+  } else {
+    state.from = from;
+    state.to = to;
+    storeSet('ovFrom', from);
+    storeSet('ovTo', to);
+    setPeriod('custom');
+  }
 }
 
 const isVisible = () => !$('view-overview').classList.contains('hidden');
@@ -423,14 +439,8 @@ function openCustomPanel() {
       applyOnPreset: true,
       // A named preset maps back to the dashboard's period (so Today keeps its hourly view,
       // 7d/30d their comparisons); a manually picked range becomes the custom period.
-      onApply: ({ preset, from, to }) => {
-        if (preset && preset !== 'custom' && PERIODS.includes(preset)) {
-          setPeriod(preset);
-        } else {
-          state.from = from; state.to = to;
-          storeSet('ovFrom', from); storeSet('ovTo', to);
-          setPeriod('custom');
-        }
+      onApply: (result) => {
+        applyRange(result);
         state.showAll = false;
         closeCustomPanel();
         renderPeriod();

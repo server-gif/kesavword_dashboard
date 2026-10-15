@@ -118,18 +118,13 @@
     <section class="view hidden" id="view-api">
       <div class="toolbar">
         <a class="btn btn-sm" href="#/overview" data-icon="back" data-size="14"><span>Overview</span></a>
-        <div class="seg" id="apiPeriod">
-          <button data-p="today" class="active">Today</button>
-          <button data-p="yesterday">Yesterday</button>
-          <button data-p="7d">7 days</button>
-          <button data-p="30d">30 days</button>
-          <button data-p="custom" hidden>Custom</button>
-        </div>
+        <button class="btn btn-sm" id="apiCalBtn" data-icon="calendar" data-size="15" title="Choose a date range"><span id="apiCalLabel">Today</span></button>
         <span class="ov-range" id="apiRange"></span>
         <span class="spacer"></span>
         <span class="ov-updated" id="apiUpdated"></span>
         <button class="icon-btn" id="apiRefresh" title="Refresh now" data-icon="refresh" data-size="16"></button>
       </div>
+      <div id="apiCustom" class="ov-custom" hidden></div>
       <div class="ov-body" id="apiBody"></div>
     </section>
 

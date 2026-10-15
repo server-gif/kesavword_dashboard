@@ -2,17 +2,20 @@
 import { $, h, api, toast, icon, publicUrl, copyWithFeedback, displayPath, session } from './lib.js';
 import { openEditorAt } from './editor.js';
 import { toggleTester } from './test.js';
-import { VS, currentPeriod, currentRange, setPeriod, setIgnored, phpErrorList } from './overview.js';
+import { VS, currentPeriod, currentRange, setIgnored, phpErrorList, PERIOD_LABEL, applyRange } from './overview.js';
+import DateRangePicker from './datepicker.js';
 import {
   compact, num, ms, setZone, bucketLabels, periodText, columnChart, chartCard, simpleTable, barList, tile, delta, statusLine, countryCard,
 } from './charts.js';
 
 const state = { script: null, data: null, loading: false, seq: 0 };
+let picker = null;
 
 export async function showApiDetail(params) {
   const script = params.get('script') || '';
   if (state.script !== script) state.data = null;
   state.script = script;
+  closeCustomPanel();
   renderPeriod();
   renderHeader();
   await load(false);
@@ -60,7 +63,15 @@ async function load(fresh) {
 }
 
 function renderPeriod() {
-  document.querySelectorAll('#apiPeriod button').forEach((b) => b.classList.toggle('active', b.dataset.p === currentPeriod()));
+  const label = $('apiCalLabel');
+  if (label) label.textContent = PERIOD_LABEL[currentPeriod()] || 'Today';
+  // Keep the open picker in sync with the current period.
+  const panel = $('apiCustom');
+  if (picker && panel && !panel.hidden) {
+    const range = currentRange();
+    if (range) picker.setRange(range.from, range.to);
+    else picker.markPreset(currentPeriod());
+  }
 }
 
 // ---------- page ----------
@@ -173,12 +184,40 @@ function renderClients(d) {
 
 // ---------- wiring ----------
 
-document.querySelectorAll('#apiPeriod button').forEach((b) => {
-  b.onclick = () => {
-    if (currentPeriod() === b.dataset.p) return;
-    setPeriod(b.dataset.p);
-    renderPeriod();
-    load(false);
-  };
-});
+const calBtn = $('apiCalBtn');
+if (calBtn) calBtn.onclick = () => {
+  const panel = $('apiCustom');
+  if (panel && panel.hidden) openCustomPanel();
+  else closeCustomPanel();
+};
 $('apiRefresh').onclick = () => load(true);
+
+function openCustomPanel() {
+  const panel = $('apiCustom');
+  if (!panel) return;
+  panel.hidden = false;
+  if (!picker) {
+    picker = new DateRangePicker(panel, {
+      max: new Date(),
+      format: 'DD-MM-YYYY',
+      applyOnPreset: true,
+      // Same calendar as Overview: a preset maps back to a period, a manual range becomes custom.
+      onApply: (result) => {
+        applyRange(result);
+        closeCustomPanel();
+        renderPeriod();
+        load(true);
+      },
+      onCancel: () => closeCustomPanel(),
+    });
+  }
+  // Sync the picker to the current selection when opening.
+  const range = currentRange();
+  if (range) picker.setRange(range.from, range.to);
+  else picker.markPreset(currentPeriod());
+}
+
+function closeCustomPanel() {
+  const panel = $('apiCustom');
+  if (panel) panel.hidden = true;
+}
