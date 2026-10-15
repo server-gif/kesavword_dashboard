@@ -9,6 +9,9 @@ const posix = {
 };
 const DAY = 86400000;
 const PERIODS = ['today', 'yesterday', '7d', '30d', 'custom'];
+// How far back rotated access logs may exist. A custom range is honoured up to this many days;
+// days whose log file no longer survives are simply skipped by the reader (nothing is invented).
+const MAX_LOG_DAYS = 365;
 
 function zonedParts(ms, timezone) {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -42,18 +45,19 @@ const parseKey = (k) => (/^\d{14}$/.test(k || '')
   ? Date.UTC(+k.slice(0, 4), +k.slice(4, 6) - 1, +k.slice(6, 8), +k.slice(8, 10), +k.slice(10, 12), +k.slice(12, 14))
   : null);
 
-function periodWindow(period, timezone, now = Date.now(), custom = null) {
+function periodWindow(period, timezone, now = Date.now(), custom = null, maxDays = MAX_LOG_DAYS) {
   const today = localDayStart(now, timezone);
   const daysBack = (n) => localDayStart(today - n * DAY + 12 * 3600000, timezone);
   if (period === 'custom' && custom) {
     const cf = dayStartStr(custom.from, timezone);
     const ct = dayStartStr(custom.to, timezone);
     if (cf != null && ct != null) {
-      const earliest = daysBack(30);                    // older days have no rotated log left to read
-      let a = Math.max(Math.min(cf, ct), earliest);     // tolerate a swapped range, clamp to retained logs
-      let b = Math.min(Math.max(cf, ct), today + DAY);  // don't go beyond today
-      if (b - a > 31 * DAY) b = a + 31 * DAY;           // cap span at 31 days
-      const buckets = Math.round((b - a) / DAY) || 1;
+      // Honour the requested range as-is; only clamp to the window the server can still read
+      // (rotated logs older than this are gone) and to "not beyond today". No artificial span cap.
+      const earliest = daysBack(maxDays);
+      const a = Math.max(Math.min(cf, ct), earliest);   // tolerate a swapped range
+      const b = Math.min(Math.max(cf, ct), today + DAY); // don't go beyond today
+      const buckets = Math.max(1, Math.round((b - a) / DAY));
       return { from: a, to: b, size: 86400, buckets, compare: null };
     }
   }
@@ -69,13 +73,13 @@ function periodWindow(period, timezone, now = Date.now(), custom = null) {
   }
 }
 
-function logFiles(base, from, to, now = Date.now()) {
+// Returns the {base, first, last} day-index window to read (0 = today's live log, 1 = base.1,
+// N = base.N.gz). catFiles emits these as a shell loop so the command stays short for any range.
+function logFiles(base, from, to, now = Date.now(), maxDays = MAX_LOG_DAYS) {
   const utcDay = (ms) => Math.floor(ms / DAY);
-  const first = utcDay(now) - utcDay(from);
+  const first = Math.min(utcDay(now) - utcDay(from), maxDays);
   const last = Math.max(0, utcDay(now) - utcDay(Math.min(to, now) - 1));
-  const out = [];
-  for (let i = Math.min(first, 30); i >= last; i--) out.push(i === 0 ? base : i === 1 ? `${base}.1` : `${base}.${i}.gz`);
-  return out;
+  return { base, first, last };
 }
 
 const SAFE_PATH = /^\/[\w./-]+$/;
@@ -83,9 +87,13 @@ const SAFE_PATH = /^\/[\w./-]+$/;
 // "$HOME/applications/…". home === '/' means it is not locked.
 const shellPath = (p, home) => (home === '/' ? `"$HOME${p}"` : `"${p}"`);
 
-function catFiles(files, home) {
-  for (const f of files) if (!SAFE_PATH.test(f)) throw new Error(`Unsupported log path: ${f}`);
-  return `for f in ${files.map((f) => shellPath(f, home)).join(' ')}; do [ -f "$f" ] && zcat -f "$f"; done`;
+function catFiles({ base, first, last }, home) {
+  if (!SAFE_PATH.test(base)) throw new Error(`Unsupported log path: ${base}`);
+  const b = shellPath(base, home);
+  // i = days ago: 0 → live log, 1 → base.1, N → base.N.gz. Missing days are skipped by [ -f ].
+  return `for i in $(seq ${last} ${first}); do `
+    + `if [ "$i" -eq 0 ]; then f=${b}; elif [ "$i" -eq 1 ]; then f=${b}.1; else f=${b}.$i.gz; fi; `
+    + `[ -f "$f" ] && zcat -f "$f"; done`;
 }
 
 const MONTH_MAP = String.raw`
@@ -241,10 +249,10 @@ const MONTHS = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7,
 const ERR_LINE = /^\[\w{3} (\w{3}) +(\d+) (\d\d):(\d\d):(\d\d)[.\d]* (\d{4})\]/;
 const PHP_MSG = /PHP (Fatal error|Parse error|Warning|Notice|Deprecated):\s+(.+?) in (\/\S+?\.php)(?: on line |:)(\d+)/g;
 
-async function readErrorLines(c, home, errorLog, from, to) {
+async function readErrorLines(c, home, errorLog, from, to, maxDays = MAX_LOG_DAYS) {
   if (!errorLog) return '';
   try {
-    const out = await c.exec(`${catFiles(logFiles(errorLog, from - DAY, to), home)} | grep -F "PHP message:" | tail -n 50000`);
+    const out = await c.exec(`${catFiles(logFiles(errorLog, from - DAY, to, Date.now(), maxDays), home)} | grep -F "PHP message:" | tail -n 50000`);
     return out.stdout;
   } catch {
     return '';
@@ -343,13 +351,14 @@ async function markMissing(c, paths, home, cap = 150) {
 // ctx carries: c (connection), home, accessLog, webLog, errorLog, rootDir, toRootPath, timezone, period, custom
 async function buildOverview(ctx) {
   const { c, home, accessLog, errorLog, rootDir, toRootPath, timezone, period, custom } = ctx;
+  const retention = ctx.retentionDays || MAX_LOG_DAYS;
   const now = Date.now();
-  const win = periodWindow(period, timezone, now, custom);
+  const win = periodWindow(period, timezone, now, custom, retention);
   const multiDay = win.size === 86400;
   const scanFrom = win.compare ? Math.min(win.from, win.compare.from) : win.from;
   const [main, errText] = await Promise.all([
-    summarise(c, home, logFiles(accessLog, scanFrom, win.to, now), { from: win.from, to: win.to, size: win.size, perScript: multiDay, compare: win.compare, geo: true }),
-    readErrorLines(c, home, errorLog, win.from, win.to),
+    summarise(c, home, logFiles(accessLog, scanFrom, win.to, now, retention), { from: win.from, to: win.to, size: win.size, perScript: multiDay, compare: win.compare, geo: true }),
+    readErrorLines(c, home, errorLog, win.from, win.to, retention),
   ]);
   const compare = main.compare;
   const t = main.totals;
@@ -421,15 +430,16 @@ async function buildOverview(ctx) {
 async function buildApiDetail(ctx) {
   const { c, home, accessLog, webLog, errorLog, rootDir, toRootPath, timezone, period, script, custom } = ctx;
   if (!SAFE_PATH.test(script)) throw new Error('This API path has characters that cannot be analysed');
+  const retention = ctx.retentionDays || MAX_LOG_DAYS;
   const now = Date.now();
-  const win = periodWindow(period, timezone, now, custom);
+  const win = periodWindow(period, timezone, now, custom, retention);
   const apiPath = rootDir === '/' ? script : posix.join(rootDir, script);
 
   const scanFrom = win.compare ? Math.min(win.from, win.compare.from) : win.from;
   const [main, clients, errText] = await Promise.all([
-    summarise(c, home, logFiles(accessLog, scanFrom, win.to, now), { from: win.from, to: win.to, size: win.size, want: script, compare: win.compare, geo: true }),
-    webLog ? summariseClients(c, home, logFiles(webLog, win.from, win.to, now), { from: win.from, to: win.to, want: script }).catch(() => null) : null,
-    readErrorLines(c, home, errorLog, win.from, win.to),
+    summarise(c, home, logFiles(accessLog, scanFrom, win.to, now, retention), { from: win.from, to: win.to, size: win.size, want: script, compare: win.compare, geo: true }),
+    webLog ? summariseClients(c, home, logFiles(webLog, win.from, win.to, now, retention), { from: win.from, to: win.to, want: script }).catch(() => null) : null,
+    readErrorLines(c, home, errorLog, win.from, win.to, retention),
   ]);
   const compare = main.compare;
   const countries = await countriesFor(main.geo);

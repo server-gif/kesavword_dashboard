@@ -717,7 +717,7 @@ async function serveSummary(c, key, period, build) {
   // block the response — which is what an explicit refresh used to do — hangs the request and can
   // starve the whole isolate, freezing every panel. Serve what we already have and rebuild in the
   // background instead; only a genuine cold miss (nothing cached at all) is allowed to block.
-  const expensive = period === '7d' || period === '30d';
+  const expensive = period === '7d' || period === '30d' || period === 'custom';
   if (stale && (!fresh || expensive)) {
     const pending = cachedSummary(key, build).catch(() => {});
     try { c.executionCtx?.waitUntil(pending); } catch {} // keep the rebuild alive after we respond
@@ -746,6 +746,7 @@ function buildOverviewCtx(c, k, home, period, custom) {
     return buildOverview({
       c: k, home, accessLog: logs.access, webLog: logs.web, errorLog: await findErrorLog(k, rootDir(), cfg()),
       rootDir: rootDir(), toRootPath: (f) => toRootPath(f), timezone: (cfg().TIMEZONE || 'Asia/Kolkata').trim(), period, custom,
+      retentionDays: Number(cfg().LOG_RETENTION_DAYS) || undefined,
     });
   };
 }
@@ -779,6 +780,7 @@ app.get('/api/overview/api', async (c) => {
     return buildApiDetail({
       c: k, home: getEnv().__home || '/', accessLog: logs?.access, webLog: logs?.web, errorLog: await findErrorLog(k, rootDir(), cfg()),
       rootDir: rootDir(), toRootPath: (f) => toRootPath(f), timezone: (cfg().TIMEZONE || 'Asia/Kolkata').trim(), period, script, custom,
+      retentionDays: Number(cfg().LOG_RETENTION_DAYS) || undefined,
     });
   }));
   return c.json({ ...data, ignored: ignored[script] || null, url: c.env.SITE_URL ? c.env.SITE_URL + script : null });
