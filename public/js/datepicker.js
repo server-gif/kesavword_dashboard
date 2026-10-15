@@ -81,9 +81,14 @@ export default class DateRangePicker {
     this.selecting = 'from';
     this.hover = null;
     this.activePreset = 'today';
-    this.leftView = startOfMonth(addDays(this.end, -30));
-    this.rightView = startOfMonth(this.end);
+    this._syncViews();
     this._build();
+  }
+
+  // Keep the two panels on consecutive months (left = range start's month, right = the next).
+  _syncViews() {
+    this.leftView = startOfMonth(this.start);
+    this.rightView = addMonths(this.leftView, 1);
   }
 
   // Highlight a named preset and move the calendars onto its range (used to sync the picker
@@ -96,7 +101,8 @@ export default class DateRangePicker {
       let [s, e] = p.calc(ref);
       s = clamp(s, this.min, this.max); e = clamp(e, this.min, this.max);
       this.start = s; this.end = e;
-      this.leftView = startOfMonth(s); this.rightView = startOfMonth(e);
+      this.selecting = 'from'; this.hover = null;
+      this._syncViews();
     }
     this.render();
   }
@@ -109,8 +115,8 @@ export default class DateRangePicker {
     this.start = clamp(parseISO(from) || new Date(), this.min, this.max);
     this.end = clamp(parseISO(to) || new Date(), this.min, this.max);
     if (isBefore(this.end, this.start)) [this.start, this.end] = [this.end, this.start];
-    this.leftView = startOfMonth(this.start);
-    this.rightView = startOfMonth(this.end);
+    this.selecting = 'from'; this.hover = null;
+    this._syncViews();
     this.activePreset = 'custom';
     this.render();
   }
@@ -132,6 +138,20 @@ export default class DateRangePicker {
       this._presets(),
       el('div', 'drp-main', this._panels(now), this._footer())
     );
+    this._paintRange();
+  }
+
+  // Highlight the selected range (plus a live hover preview) by updating cell classes only, so
+  // moving the mouse over the calendar never rebuilds the DOM and steals a pending click.
+  _paintRange() {
+    const rangeEnd = this.selecting === 'to' && this.hover && !isBefore(this.hover, this.start) ? this.hover : this.end;
+    this.root.querySelectorAll('td[data-date]').forEach((td) => {
+      const d = parseISO(td.dataset.date);
+      if (!d) return;
+      td.classList.remove('active', 'in-range');
+      if (sameDay(d, this.start) || sameDay(d, rangeEnd)) td.classList.add('active');
+      else if (isAfter(d, this.start) && isBefore(d, rangeEnd)) td.classList.add('in-range');
+    });
   }
 
   _presets() {
@@ -155,7 +175,9 @@ export default class DateRangePicker {
   _side(which) {
     const dt = which === 'from' ? this.start : this.end;
     const view = which === 'from' ? this.leftView : this.rightView;
-    const setView = which === 'from' ? (v) => { this.leftView = v; this.render(); } : (v) => { this.rightView = v; this.render(); };
+    const setView = which === 'from'
+      ? (v) => { this.leftView = v; this.rightView = addMonths(v, 1); this.render(); }
+      : (v) => { this.rightView = v; this.leftView = addMonths(v, -1); this.render(); };
     return el('div', 'drp-side',
       this._box(which, dt),
       this._calendar(which, view, setView),
@@ -178,7 +200,6 @@ export default class DateRangePicker {
   }
 
   _calendar(which, view, setView) {
-    const isLeft = which === 'from';
     const cal = el('div', 'drp-cal');
     // Header with nav + selects
     const prevBtn = el('button', 'drp-nav'); prevBtn.type = 'button'; prevBtn.setAttribute('aria-label', 'Previous month');
@@ -214,7 +235,6 @@ export default class DateRangePicker {
     const tbody = el('tbody');
     const first = startOfMonth(view);
     const gridStart = addDays(first, -((first.getDay() + 6) % 7)); // Monday first
-    const rangeEnd = this.selecting === 'to' && this.hover && !isBefore(this.hover, this.start) ? this.hover : this.end;
 
     for (let row = 0; row < 6; row++) {
       const tr = el('tr');
@@ -228,27 +248,19 @@ export default class DateRangePicker {
           const disabled = (this.min && isBefore(d, this.min)) || (this.max && isAfter(d, this.max));
           if (disabled) { td.className = 'disabled'; }
           else {
-            const active = sameDay(d, this.start) || sameDay(d, rangeEnd);
-            const inRange = isAfter(d, this.start) && isBefore(d, rangeEnd);
-            if (active) td.className = 'active';
-            else if (inRange) td.className = 'in-range';
+            td.dataset.date = iso(d);
             td.onclick = () => this._pickDay(d);
-            td.onmouseenter = () => { this.hover = d; this._updateHover(which, isLeft); };
+            td.onmouseenter = () => { this.hover = d; this._paintRange(); };
           }
         }
         tr.appendChild(td);
       }
       tbody.appendChild(tr);
     }
-    table.onmouseleave = () => { this.hover = null; this.render(); };
+    table.onmouseleave = () => { this.hover = null; this._paintRange(); };
     table.appendChild(tbody);
     cal.appendChild(table);
     return cal;
-  }
-
-  _updateHover(which, isLeft) {
-    // Only re-render the grid cells for range highlight — simple approach: full re-render
-    if (this.selecting === 'to') this.render();
   }
 
   _footer() {
@@ -267,7 +279,7 @@ export default class DateRangePicker {
       let [s, e] = p.calc(ref);
       s = clamp(s, this.min, this.max); e = clamp(e, this.min, this.max);
       this.start = s; this.end = e;
-      this.leftView = startOfMonth(s); this.rightView = startOfMonth(e);
+      this._syncViews();
     }
     this.render();
     if (this.applyOnPreset && p.calc) this._apply();
@@ -279,8 +291,10 @@ export default class DateRangePicker {
       this.start = clamp(d, this.min, this.max);
       if (isBefore(this.end, this.start)) this.end = clamp(d, this.min, this.max);
       this.selecting = 'to';
+      this._syncViews();
     } else if (isBefore(d, this.start)) {
       this.start = clamp(d, this.min, this.max);
+      this._syncViews();
     } else {
       this.end = clamp(d, this.min, this.max);
       this.selecting = 'from'; this.hover = null;
@@ -295,12 +309,12 @@ export default class DateRangePicker {
     if (which === 'from') {
       this.start = clamp(d, this.min, this.max);
       if (isBefore(this.end, this.start)) this.end = clamp(d, this.min, this.max);
-      this.leftView = startOfMonth(this.start);
     } else {
       this.end = clamp(d, this.min, this.max);
       if (isBefore(this.end, this.start)) this.start = clamp(d, this.min, this.max);
-      this.rightView = startOfMonth(this.end);
     }
+    this.selecting = 'from'; this.hover = null;
+    this._syncViews();
     this.render();
   }
 
