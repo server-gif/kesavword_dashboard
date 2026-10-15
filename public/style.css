@@ -244,7 +244,7 @@ kbd { font: 11px var(--mono); opacity: .7; margin-left: 2px; }
 .path-input { flex: 1; height: 32px; padding: 0 10px; border: 1px solid var(--accent); border-radius: 7px; background: var(--surface-2); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
 .files-top .search { height: 44px; border-radius: 11px; width: 260px; box-shadow: var(--shadow-sm); }
 
-.toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 38px; }
+.toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 38px; position: relative; }
 .toolbar-group { display: flex; gap: 8px; flex-wrap: wrap; }
 .selection-bar {
   display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 6px 0 14px;
@@ -631,7 +631,7 @@ a.name:hover .name-text { color: var(--accent); }
 .ov-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 14px; padding-bottom: 8px; transition: opacity .15s; }
 .ov-body.refreshing { opacity: .55; }
 .ov-range { font-size: 13px; color: var(--text-2); }
-.ov-custom { padding: 8px 12px; }
+.ov-custom { position: absolute; top: calc(100% + 8px); left: 0; z-index: 60; }
 .ov-custom[hidden] { display: none; }
 .ov-updated { font-size: 12.5px; color: var(--text-3); }
 .ov-sub { font-size: 12.5px; color: var(--text-3); margin-top: -4px; }
