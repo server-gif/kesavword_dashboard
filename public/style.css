@@ -249,12 +249,21 @@ kbd { font: 11px var(--mono); opacity: .7; margin-left: 2px; }
   .shell.collapsed .nav-label,
   .shell.collapsed .me-text,
   .shell.collapsed .nav-badge { display: none; }
-  .shell.collapsed .sidebar-brand { justify-content: center; gap: 4px; padding: 0 0 18px; }
+  /* brand: stack the logo over the collapse handle so the narrow top isn't crowded */
+  .shell.collapsed .sidebar-brand { flex-direction: column; align-items: center; gap: 8px; padding: 0 0 14px; }
   .shell.collapsed .side-collapse { margin-left: 0; }
-  .shell.collapsed .nav-item { justify-content: center; padding: 0; }
+  /* nav: neat centered square icon tiles */
+  .shell.collapsed .nav { align-items: center; }
+  .shell.collapsed .nav-item { width: 44px; height: 40px; padding: 0; justify-content: center; }
   .shell.collapsed .nav-item > span:not(.icon) { display: none; }
+  /* active: an accent-tinted tile, not the left inset bar (which looks odd when centered) */
+  .shell.collapsed .nav-item.active { background: var(--accent-soft); color: var(--accent); box-shadow: none; }
+  .shell.collapsed .nav-item.active .icon { color: var(--accent); }
+  /* footer: centered avatar and stacked square action buttons aligned with the nav tiles */
+  .shell.collapsed .sidebar-foot { padding-left: 4px; padding-right: 4px; }
   .shell.collapsed .me { justify-content: center; }
   .shell.collapsed .me-actions { flex-direction: column; gap: 6px; }
+  .shell.collapsed .side-btn { flex: 0 0 auto; width: 100%; height: 34px; }
 }
 @media (max-width: 900px) { .side-collapse { display: none; } }
 
