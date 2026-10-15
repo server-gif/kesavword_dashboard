@@ -18,10 +18,16 @@ const WEEKDAYS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
 const PRESETS = [
-  { key: 'today', label: 'Today', calc: (n) => [n, n] },
-  { key: 'yesterday', label: 'Yesterday', calc: (n) => { const d = addDays(n, -1); return [d, d]; } },
-  { key: '7d', label: 'Last 7 days', calc: (n) => [addDays(n, -6), n] },
-  { key: '30d', label: 'Last 30 days', calc: (n) => [addDays(n, -29), n] },
+  { key: 'today', period: 'today', label: 'Today Only', calc: (n) => [n, n] },
+  { key: 'yesterday', period: 'yesterday', label: 'Yesterday Only', calc: (n) => { const d = addDays(n, -1); return [d, d]; } },
+  { key: '3d', label: '3 Days', calc: (n) => [addDays(n, -2), n] },
+  { key: '5d', label: '5 Days', calc: (n) => [addDays(n, -4), n] },
+  { key: '1w', period: '7d', label: '1 Week', calc: (n) => [addDays(n, -6), n] },
+  { key: '2w', label: '2 Weeks', calc: (n) => [addDays(n, -13), n] },
+  { key: '1m', period: '30d', label: '1 Month', calc: (n) => [addMonths(n, -1), n] },
+  { key: '90d', label: '90 Days', calc: (n) => [addDays(n, -89), n] },
+  { key: '1y', label: '1 Year', calc: (n) => [addYears(n, -1), n] },
+  { key: 'custom', label: 'Custom Range' },
 ];
 
 function pad(n) { return String(n).padStart(2, '0'); }
@@ -84,11 +90,11 @@ export default class DateRangePicker {
     this._build();
   }
 
-  // Highlight a named preset and move the calendars onto its range (used to sync the picker
-  // to the dashboard's current period when the panel opens).
-  markPreset(key) {
-    this.activePreset = key;
-    const p = PRESETS.find((x) => x.key === key);
+  // Highlight the preset that maps to a dashboard period and move the calendars onto its range
+  // (used to sync the picker to the current period when the panel opens).
+  markPreset(periodKey) {
+    const p = PRESETS.find((x) => x.period === periodKey);
+    this.activePreset = p ? p.key : 'custom';
     if (p && p.calc) {
       const ref = this.max && isAfter(new Date(), this.max) ? this.max : new Date();
       let [s, e] = p.calc(ref);
@@ -304,7 +310,8 @@ export default class DateRangePicker {
   _apply() {
     let s = this.start, e = this.end;
     if (isBefore(e, s)) [s, e] = [e, s];
-    this.onApply({ preset: this.activePreset, from: iso(s), to: iso(e) });
+    const p = PRESETS.find((x) => x.key === this.activePreset);
+    this.onApply({ preset: this.activePreset, period: (p && p.period) || null, from: iso(s), to: iso(e) });
   }
 }
 
