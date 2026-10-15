@@ -9,6 +9,7 @@ import DateRangePicker from './datepicker.js';
 
 export const PERIODS = ['today', 'yesterday', '7d', '30d', 'custom'];
 export const VS = { today: 'yesterday at this time', '7d': 'the 7 days before' };
+const PERIOD_LABEL = { today: 'Today', yesterday: 'Yesterday', '7d': '7 days', '30d': '30 days', custom: 'Custom range' };
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const state = {
@@ -42,7 +43,6 @@ export async function showOverview() {
   clearInterval(timer);
   timer = setInterval(() => { if (isVisible() && state.period !== 'yesterday' && !document.hidden) load(false); }, 120000);
   renderPeriod();
-  if (state.period === 'custom') openCustomPanel();
   await load(false);
 }
 
@@ -85,9 +85,14 @@ async function load(fresh) {
 }
 
 function renderPeriod() {
-  document.querySelectorAll('#ovPeriod button').forEach((b) => b.classList.toggle('active', b.dataset.p === state.period));
+  const label = $('ovCalLabel');
+  if (label) label.textContent = PERIOD_LABEL[state.period] || 'Today';
+  // Keep the open picker in sync with the current period.
   const panel = $('ovCustom');
-  if (panel) panel.hidden = state.period !== 'custom';
+  if (picker && panel && !panel.hidden) {
+    if (state.period === 'custom' && state.from && state.to) picker.setRange(state.from, state.to);
+    else picker.markPreset(state.period);
+  }
 }
 
 // ---------- page ----------
@@ -399,16 +404,12 @@ function renderPhpErrors(d) {
 
 // ---------- wiring ----------
 
-document.querySelectorAll('#ovPeriod button').forEach((b) => {
-  b.onclick = () => {
-    if (state.period === b.dataset.p) return;
-    setPeriod(b.dataset.p);
-    state.showAll = false;
-    renderPeriod();
-    if (b.dataset.p === 'custom') openCustomPanel();
-    load(false);
-  };
-});
+const calBtn = $('ovCalBtn');
+if (calBtn) calBtn.onclick = () => {
+  const panel = $('ovCustom');
+  if (panel && panel.hidden) openCustomPanel();
+  else closeCustomPanel();
+};
 $('ovRefresh').onclick = () => load(true);
 
 function openCustomPanel() {
@@ -419,14 +420,30 @@ function openCustomPanel() {
     picker = new DateRangePicker(panel, {
       max: new Date(),
       format: 'DD-MM-YYYY',
-      onApply: ({ from, to }) => {
-        state.from = from; state.to = to;
-        storeSet('ovFrom', from); storeSet('ovTo', to);
+      // A named preset maps back to the dashboard's period (so Today keeps its hourly view,
+      // 7d/30d their comparisons); a manually picked range becomes the custom period.
+      onApply: ({ preset, from, to }) => {
+        if (preset && preset !== 'custom' && PERIODS.includes(preset)) {
+          setPeriod(preset);
+        } else {
+          state.from = from; state.to = to;
+          storeSet('ovFrom', from); storeSet('ovTo', to);
+          setPeriod('custom');
+        }
+        state.showAll = false;
+        closeCustomPanel();
+        renderPeriod();
         load(true);
       },
-      onCancel: () => { $('ovCustom').hidden = true; },
+      onCancel: () => closeCustomPanel(),
     });
   }
-  // Pre-fill from saved state
-  if (state.from && state.to) picker.setRange(state.from, state.to);
+  // Sync the picker to the current selection when opening.
+  if (state.period === 'custom' && state.from && state.to) picker.setRange(state.from, state.to);
+  else picker.markPreset(state.period);
+}
+
+function closeCustomPanel() {
+  const panel = $('ovCustom');
+  if (panel) panel.hidden = true;
 }

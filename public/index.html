@@ -102,13 +102,7 @@
     <!-- Overview -->
     <section class="view hidden" id="view-overview">
       <div class="toolbar">
-        <div class="seg" id="ovPeriod">
-          <button data-p="today" class="active">Today</button>
-          <button data-p="yesterday">Yesterday</button>
-          <button data-p="7d">7 days</button>
-          <button data-p="30d">30 days</button>
-          <button data-p="custom" hidden>Custom</button>
-        </div>
+        <button class="btn btn-sm" id="ovCalBtn" data-icon="calendar" data-size="15" title="Choose a date range"><span id="ovCalLabel">Today</span></button>
         <span class="ov-range" id="ovRange"></span>
         <span class="spacer"></span>
         <span class="ov-updated" id="ovUpdated"></span>

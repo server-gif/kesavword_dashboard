@@ -18,16 +18,10 @@ const WEEKDAYS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
 const PRESETS = [
-  { key: 'today', label: 'Today Only', calc: (n) => [n, n] },
-  { key: 'yesterday', label: 'Yesterday Only', calc: (n) => { const d = addDays(n, -1); return [d, d]; } },
-  { key: '3d', label: '3 Days', calc: (n) => [addDays(n, -2), n] },
-  { key: '5d', label: '5 Days', calc: (n) => [addDays(n, -4), n] },
-  { key: '1w', label: '1 Week', calc: (n) => [addDays(n, -6), n] },
-  { key: '2w', label: '2 Weeks', calc: (n) => [addDays(n, -13), n] },
-  { key: '1m', label: '1 Month', calc: (n) => [addMonths(n, -1), n] },
-  { key: '90d', label: '90 Days', calc: (n) => [addDays(n, -89), n] },
-  { key: '1y', label: '1 Year', calc: (n) => [addYears(n, -1), n] },
-  { key: 'custom', label: 'Custom Range' },
+  { key: 'today', label: 'Today', calc: (n) => [n, n] },
+  { key: 'yesterday', label: 'Yesterday', calc: (n) => { const d = addDays(n, -1); return [d, d]; } },
+  { key: '7d', label: 'Last 7 days', calc: (n) => [addDays(n, -6), n] },
+  { key: '30d', label: 'Last 30 days', calc: (n) => [addDays(n, -29), n] },
 ];
 
 function pad(n) { return String(n).padStart(2, '0'); }
@@ -84,10 +78,25 @@ export default class DateRangePicker {
     this.end = this.max || new Date();
     this.selecting = 'from';
     this.hover = null;
-    this.activePreset = 'custom';
+    this.activePreset = 'today';
     this.leftView = startOfMonth(addDays(this.end, -30));
     this.rightView = startOfMonth(this.end);
     this._build();
+  }
+
+  // Highlight a named preset and move the calendars onto its range (used to sync the picker
+  // to the dashboard's current period when the panel opens).
+  markPreset(key) {
+    this.activePreset = key;
+    const p = PRESETS.find((x) => x.key === key);
+    if (p && p.calc) {
+      const ref = this.max && isAfter(new Date(), this.max) ? this.max : new Date();
+      let [s, e] = p.calc(ref);
+      s = clamp(s, this.min, this.max); e = clamp(e, this.min, this.max);
+      this.start = s; this.end = e;
+      this.leftView = startOfMonth(s); this.rightView = startOfMonth(e);
+    }
+    this.render();
   }
 
   show() { this.container.style.display = ''; }
@@ -295,7 +304,7 @@ export default class DateRangePicker {
   _apply() {
     let s = this.start, e = this.end;
     if (isBefore(e, s)) [s, e] = [e, s];
-    this.onApply({ from: iso(s), to: iso(e) });
+    this.onApply({ preset: this.activePreset, from: iso(s), to: iso(e) });
   }
 }
 
