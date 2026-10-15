@@ -31,6 +31,13 @@ const countryName = (code) => {
 
 // prefixCounts: Map of "a.b.c" (the /24 of the caller's IPv4) or "v6" -> calls.
 // Returns [{ code, name, calls }] biggest first, or null when the geo table is empty.
+//
+// A busy multi-week range can have 100k+ distinct /24 prefixes. Resolving every one with its own
+// D1 query blows the Worker's subrequest limit and the request timeout, which 500s the whole
+// overview. We resolve only the busiest GEO_MAX_PREFIXES (they cover the overwhelming majority of
+// calls) and fold the long tail into "Unknown", so geo work stays bounded regardless of range.
+const GEO_MAX_PREFIXES = 6000;
+
 export async function countriesFor(prefixCounts) {
   if (!prefixCounts?.size) return [];
   const db = getEnv().DB;
@@ -39,15 +46,18 @@ export async function countriesFor(prefixCounts) {
   // Worker invocation" limit and stalls the page (this is what made /api/overview return 503).
   const probe = await db.prepare('SELECT COUNT(*) AS n FROM geo').first().catch(() => null);
   if (!probe || !probe.n) return null;
-  const v4 = [...prefixCounts].filter(([p]) => p !== 'v6');
+  // Resolve the highest-traffic prefixes first; the long tail is a small share of total calls.
+  const v4 = [...prefixCounts].filter(([p]) => p !== 'v6').sort((a, b) => b[1] - a[1]);
+  const head = v4.slice(0, GEO_MAX_PREFIXES);
+  const tailCalls = v4.slice(GEO_MAX_PREFIXES).reduce((n, [, calls]) => n + calls, 0);
   const totals = new Map();
   let any = false;
   const add = (code, calls) => totals.set(code, (totals.get(code) || 0) + calls);
   // Batch the range lookups (D1 allows up to 100 statements per batch) so the whole country
-  // breakdown costs a handful of API calls instead of hundreds.
+  // breakdown costs a bounded handful of API calls instead of tens of thousands.
   const CHUNK = 90;
-  for (let i = 0; i < v4.length; i += CHUNK) {
-    const chunk = v4.slice(i, i + CHUNK);
+  for (let i = 0; i < head.length; i += CHUNK) {
+    const chunk = head.slice(i, i + CHUNK);
     const ints = chunk.map(([prefix]) => ipv4ToInt(`${prefix}.1`));
     const stmts = ints.map((ip) => db.prepare(
       'SELECT cc FROM geo WHERE start <= ?1 ORDER BY start DESC LIMIT 1'
@@ -61,6 +71,7 @@ export async function countriesFor(prefixCounts) {
       add(code, calls);
     });
   }
+  if (tailCalls) add('unknown', tailCalls); // unresolved long tail, kept off the per-IP lookups
   // geo table not populated yet: report unavailable so the page just hides the country list
   if (!any) return null;
   return [...totals].map(([code, calls]) => ({

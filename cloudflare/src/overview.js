@@ -366,7 +366,7 @@ async function buildOverview(ctx) {
   if (!t || !t.requests) return { ...base, empty: true, to: Math.min(win.to, now) };
 
   const phpErrors = parseErrorLog(errText, toRootPath, win.from, win.to);
-  const countries = await countriesFor(main.geo);
+  const countries = await countriesFor(main.geo).catch(() => null);
   const phpByPath = new Map();
   for (const e of phpErrors) if (e.path) phpByPath.set(e.path, (phpByPath.get(e.path) || 0) + e.count);
 
@@ -442,7 +442,7 @@ async function buildApiDetail(ctx) {
     readErrorLines(c, home, errorLog, win.from, win.to, retention),
   ]);
   const compare = main.compare;
-  const countries = await countriesFor(main.geo);
+  const countries = await countriesFor(main.geo).catch(() => null);
   const phpErrors = parseErrorLog(errText, toRootPath, win.from, win.to).filter((e) => e.path === apiPath);
   const exists = !(await markMissing(c, [apiPath], home)).get(apiPath);
   const t = main.totals;
