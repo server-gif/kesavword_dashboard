@@ -921,6 +921,22 @@ const noConnResponse = () => ({
 });
 const monErrorMessage = (err) => (err instanceof sf.MonitorError ? err.message : 'Could not read the server status just now.');
 
+// Rolling up/down + metric history, stored in the same D1 cache table under a dedicated key.
+const histStore = { readCache: (k) => store.readCache(k), writeCache: (k, rec) => store.writeCache(k, rec) };
+// Rapid on-demand reads must not spam the ring; the ~30-min cron (below) is the steady sampler.
+const SAMPLE_MIN_MS = 120000;
+async function sampleFromResult(result) {
+  if (!result) return;
+  let sample = null;
+  if (result.source === 'live' && result.host) sample = sf.toSample(result.host, result.refreshedAt || Date.now());
+  else if (result.stale || result.unavailable) sample = sf.downSample(Date.now()); // could not reach just now
+  if (!sample) return; // a plain cache hit did not probe, so record nothing
+  const list = await sf.loadSamples(histStore);
+  const last = list.length ? list[list.length - 1] : null;
+  if (last && Math.abs(sample.t - last.t) < SAMPLE_MIN_MS && !!sample.up === !!last.up) return;
+  await sf.appendSample(histStore, sample);
+}
+
 app.get('/api/server-monitoring/status', async (c) => {
   const d = adminOnly(c); if (d) return d;
   return c.json({ ...sf.statusBlock(cfg()), site: (c.env.SITE_NAME || 'Server Dashboard').trim() });
@@ -930,7 +946,9 @@ app.get('/api/server-monitoring/servers', async (c) => {
   const d = adminOnly(c); if (d) return d;
   const env = cfg();
   if (!sf.hasCreds(env)) return c.json(noConnResponse());
-  return c.json(await hostCache.load(hostCacheKey, env, { fresh: c.req.query('fresh') === '1' }));
+  const result = await hostCache.load(hostCacheKey, env, { fresh: c.req.query('fresh') === '1' });
+  await sampleFromResult(result).catch(() => {});
+  return c.json(result);
 });
 
 app.get('/api/server-monitoring/servers/:id', async (c) => {
@@ -950,6 +968,14 @@ app.get('/api/server-monitoring/servers/:id', async (c) => {
     if (rec) return c.json({ server: rec, refreshedAt: snap.at, source: 'stale', stale: true, error: monErrorMessage(err) });
     return c.json({ error: monErrorMessage(err) }, err.status || 502);
   }
+});
+
+// Health & uptime: real up/down history derived only from the samples we actually collected.
+app.get('/api/server-monitoring/health', async (c) => {
+  const d = adminOnly(c); if (d) return d;
+  if (!sf.hasCreds(cfg())) return c.json({ ...sf.buildHealth([]), unavailable: true });
+  const samples = await sf.loadSamples(histStore);
+  return c.json(sf.buildHealth(samples));
 });
 
 app.get('/api/server-monitoring/settings', async (c) => {
@@ -1012,6 +1038,14 @@ export default {
           });
         }));
       } catch {}
+      // Steady server-health sampler: probe over SSH and record an up (with cpu/load/mem/disk) or a
+      // down sample every cron tick, so brief outages are caught even when nobody opens the page.
+      try {
+        const result = await hostCache.load(hostCacheKey, env, { fresh: true });
+        await sampleFromResult(result);
+      } catch {
+        await sf.appendSample(histStore, sf.downSample(Date.now())).catch(() => {});
+      }
     })());
   },
 };

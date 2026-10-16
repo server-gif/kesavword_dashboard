@@ -12,7 +12,7 @@ let state = blank();
 function blank() {
   return {
     tab: 'overview', server: null,
-    status: null, servers: null, meta: null, settings: null,
+    status: null, servers: null, meta: null, health: null, settings: null,
     q: '', region: '', statusSel: '', sort: { key: 'name', dir: 1 },
   };
 }
@@ -47,7 +47,7 @@ function toolbar() {
 }
 
 async function refreshNow() {
-  state.servers = null; state.meta = null;
+  state.servers = null; state.meta = null; state.health = null;
   await drawTab();
 }
 
@@ -95,6 +95,12 @@ async function getServers(force) {
   return state.servers;
 }
 
+async function getHealth(force) {
+  if (state.health && !force) return state.health;
+  state.health = await api('GET', `/api/${S}/health`);
+  return state.health;
+}
+
 // ---------- entry ----------
 
 async function drawTab() {
@@ -111,6 +117,7 @@ async function drawTab() {
       }
       default: {
         await getServers(false);
+        await getHealth(false).catch(() => {});
         return drawTabResult(overviewView(status));
       }
     }
@@ -160,6 +167,7 @@ function overviewView(status) {
     tile('Connection', status && status.connected ? 'Verified' : 'Live', h('div', { class: 'kpi-delta' }, host.hostname ? `read from ${host.hostname}` : 'read over SSH')),
     tile('Uptime', dash(humanUptime(m.uptimeSeconds)), h('div', { class: 'kpi-delta' }, 'continuous since boot')),
     tile('Load (1 min)', m.load1 != null ? String(m.load1) : '—', m.cores != null ? h('div', { class: 'kpi-delta' }, `${m.cores} core${m.cores === 1 ? '' : 's'}`) : null),
+    tile('CPU', m.cpuPct != null ? `${m.cpuPct}%` : '—', m.cores != null ? h('div', { class: 'kpi-delta' }, `busy of ${m.cores} core${m.cores === 1 ? '' : 's'}`) : null),
     tile('Memory', m.memory && m.memory.usedPct != null ? `${m.memory.usedPct}%` : '—', m.memory && m.memory.totalMb != null ? h('div', { class: 'kpi-delta' }, `${round1((m.memory.usedMb || 0) / 1024)}/${round1(m.memory.totalMb / 1024)} GB`) : null),
     tile('Disk', m.disk && m.disk.usedPct != null ? `${m.disk.usedPct}%` : '—', m.disk && m.disk.totalGb != null ? h('div', { class: 'kpi-delta' }, `${round1(m.disk.usedGb)}/${round1(m.disk.totalGb)} GB`) : null)));
 
@@ -175,7 +183,9 @@ function overviewView(status) {
       h('div', { class: 'sm-meta-k' }, k),
       h('div', { class: 'sm-meta-v mono' }, typeof v === 'object' ? v : h('span', {}, v))))));
 
-  out.push(futurePhaseNote('Historical metric charts, uptime/incidents, alerts and recovery actions will appear here once those phases are approved. Everything shown now is read live from the server over SSH \u2014 nothing is invented.'));
+  out.push(healthPanel(state.health));
+
+  out.push(futurePhaseNote('Everything above is read live from the server over SSH, and the up/down history below builds from real checks — nothing is invented. Proactive alerting (email/other channels) and guided recovery actions arrive in later phases.'));
   out.push(h('div', { class: 'table-foot' }, `Source: ${state.meta?.source || '—'}${state.meta?.refreshedAt ? ` · ${fmtDate(state.meta.refreshedAt)}` : ''}`));
   return out;
 }
@@ -184,11 +194,53 @@ function futurePhaseNote(text) {
   return h('div', { class: 'card ov-card sm-future' },
     h('div', { class: 'ov-card-head' }, h('div', {}, h('div', { class: 'ov-card-title' }, 'Future phases'), h('div', { class: 'ov-card-sub' }, text))),
     h('div', { class: 'sm-future-grid' },
-      ...[['Metrics & charts', 'Historical CPU, memory, disk and network charts, sampled from the server over SSH.'],
-        ['Health & uptime', 'Rolling uptime and incident history for the server.'],
-        ['Alerts & notifications', 'Threshold and health alerts (email and other channels).'],
+      ...[['Alerts & notifications', 'Threshold and health alerts sent to you (email and other channels).'],
         ['Recovery actions', 'Controlled service restarts and other safe remediations, with confirmation, cooldown and audit.']]
         .map(([t, d]) => h('div', { class: 'sm-future-item' }, icon('info', 15), h('div', {}, h('div', { class: 'strong' }, t), h('div', { class: 'muted' }, d, h('span', { class: 'badge badge-gray' }, 'Available in a future phase')))))));
+}
+
+// ---------- health & uptime (built only from real collected samples) ----------
+
+function uptimeText(u) { return (u && u.pct != null) ? `${u.pct}%` : '—'; }
+
+function coverageNote(u) {
+  if (!u || !u.coverageMs) return 'not enough history yet';
+  const hrs = u.coverageMs / 3600e3;
+  if (hrs < 1) return `${Math.max(1, Math.round(u.coverageMs / 60000))} min observed`;
+  if (hrs < 48) return `${Math.round(hrs)}h observed`;
+  return `${Math.round(hrs / 24)}d observed`;
+}
+
+function statusDot(health) {
+  const map = { up: ['badge-green', 'Online'], down: ['badge-amber', 'Not responding'], unknown: ['badge-gray', 'Unknown'] };
+  const [cls, label] = map[(health && health.status) || 'unknown'] || map.unknown;
+  return h('span', { class: `badge ${cls}` }, label);
+}
+
+function healthPanel(health) {
+  const hd = health || {};
+  if (!hd.hasData) {
+    return h('div', { class: 'card ov-card sm-health' },
+      h('div', { class: 'ov-card-head' }, h('div', {}, h('div', { class: 'ov-card-title' }, 'Health & uptime'), h('div', { class: 'ov-card-sub' }, 'Up/down history is being collected.'))),
+      banner('info', 'Nothing here is invented: the first readings appear as automatic checks run (about every 30 minutes, and whenever you refresh). Once enough accumulate you\u2019ll see uptime %, an up/down timeline and a list of up/down events.'));
+  }
+  const strip = h('div', { class: 'sm-strip', title: 'Last 24 hours' },
+    ...(hd.strip || []).map((v) => h('div', { class: `sm-seg ${v === 1 ? 'up' : v === 0 ? 'down' : 'none'}`, title: v === 1 ? 'up' : v === 0 ? 'down' : 'no check' })));
+  const upTiles = h('div', { class: 'sm-uptime' },
+    h('div', { class: 'sm-up-cell' }, h('div', { class: 'sm-up-k' }, 'Uptime · 24h'), h('div', { class: 'sm-up-v' }, uptimeText(hd.uptime && hd.uptime['24h'])), h('div', { class: 'muted sm-up-n' }, coverageNote(hd.uptime && hd.uptime['24h']))),
+    h('div', { class: 'sm-up-cell' }, h('div', { class: 'sm-up-k' }, 'Uptime · 7d'), h('div', { class: 'sm-up-v' }, uptimeText(hd.uptime && hd.uptime['7d'])), h('div', { class: 'muted sm-up-n' }, coverageNote(hd.uptime && hd.uptime['7d']))));
+  const events = hd.events || [];
+  const eventList = events.length
+    ? h('div', { class: 'sm-events' }, ...events.map((ev) => h('div', { class: 'sm-event' },
+        h('span', { class: `badge ${ev.up ? 'badge-green' : 'badge-amber'}` }, ev.up ? 'Up' : 'Down'),
+        h('span', { class: 'muted' }, timeAgo(ev.t)))))
+    : h('div', { class: 'muted sm-noevents' }, 'No up/down changes recorded yet — the server has stayed reachable.');
+  return h('div', { class: 'card ov-card sm-health' },
+    h('div', { class: 'ov-card-head' }, h('div', {},
+      h('div', { class: 'ov-card-title' }, 'Health & uptime'),
+      h('div', { class: 'ov-card-sub' }, 'Current: ', statusDot(hd), h('span', { class: 'muted' }, ` · last check ${hd.lastSampleAt ? timeAgo(hd.lastSampleAt) : '—'}`)))),
+    strip, upTiles, eventList,
+    h('div', { class: 'muted sm-health-foot' }, '“Down” means the server did not answer an SSH check at that moment; it is not the same as your website being healthy.'));
 }
 
 // ---------- servers ----------
@@ -266,6 +318,7 @@ function serversView() {
 async function detailView() {
   const id = state.server;
   const out = [...metaBanners()];
+  await getHealth(false).catch(() => {});
   let server = (state.servers || []).find((s) => String(s.id) === String(id));
   let meta = { source: server ? 'cache' : null };
   try {
@@ -286,6 +339,8 @@ async function detailView() {
     statusPill(server.status), refreshed));
 
   const m = server.metrics || {};
+  const hd = state.health || {};
+  const upCell = (w) => (hd.uptime && hd.uptime[w]) ? `${uptimeText(hd.uptime[w])} (${coverageNote(hd.uptime[w])})` : '—';
   const spec = [
     ['Hostname', server.hostname || '—'],
     ['Provider', server.provider || '—'],
@@ -295,8 +350,11 @@ async function detailView() {
     ['Public IP', server.publicIp || '—'],
     ['Interface IP', server.internalIp || '—'],
     ['CPU cores', m.cores != null ? String(m.cores) : '—'],
+    ['CPU usage (now)', m.cpuPct != null ? `${m.cpuPct}%` : '—'],
     ['Load (1/5/15 min)', m.load1 != null ? `${m.load1} / ${m.load5} / ${m.load15}` : '—'],
-    ['Uptime', humanUptime(m.uptimeSeconds) || '—'],
+    ['Uptime (this boot)', humanUptime(m.uptimeSeconds) || '—'],
+    ['Uptime · 24h', upCell('24h')],
+    ['Uptime · 7d', upCell('7d')],
     ['Memory', (m.memory && m.memory.totalMb != null) ? `${round1((m.memory.usedMb || 0) / 1024)} / ${round1(m.memory.totalMb / 1024)} GB${m.memory.usedPct != null ? ` (${m.memory.usedPct}% used)` : ''}` : (server.memoryGb != null ? `${server.memoryGb} GB` : '—')],
     [`Disk${m.disk && m.disk.mount ? ` (${m.disk.mount})` : ''}`, (m.disk && m.disk.totalGb != null) ? `${round1(m.disk.usedGb)} / ${round1(m.disk.totalGb)} GB${m.disk.usedPct != null ? ` (${m.disk.usedPct}% used)` : ''}` : (server.diskGb != null ? `${server.diskGb} GB` : '—')],
   ];
@@ -304,9 +362,7 @@ async function detailView() {
     h('div', { class: 'sm-meta-row' }, h('div', { class: 'sm-meta-k' }, k), h('div', { class: 'sm-meta-v mono' }, String(v))))));
 
   out.push(h('div', { class: 'sm-future-grid' },
-    ...[['Metrics', 'CPU, memory, disk and network charts.'],
-      ['Health & uptime', 'Endpoint checks and incidents.'],
-      ['Alerts', 'Threshold and health alerts.'],
+    ...[['Alerts', 'Threshold and health alerts sent to you.'],
       ['Recovery', 'Start / stop / restart actions with safeguards.']]
       .map(([t, d]) => h('div', { class: 'card ov-card sm-future-item lg' },
         h('div', { class: 'ov-card-title' }, t), h('div', { class: 'muted' }, d),

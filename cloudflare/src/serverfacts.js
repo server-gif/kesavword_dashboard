@@ -65,6 +65,11 @@ const PROBE = [
   'echo "@@UPTIME@@" $(cut -d. -f1 /proc/uptime 2>/dev/null)',
   'echo "@@LOAD@@" $(cat /proc/loadavg 2>/dev/null)',
   'echo "@@CORES@@" $(nproc 2>/dev/null)',
+  // Instantaneous CPU utilisation: sample the aggregate cpu jiffy line, wait ~1s, sample again, and
+  // emit both on one record line. The delta over that window is the real busy% (not an since-boot
+  // average). The single remote `sleep 1` costs wall-clock time only (no extra Worker CPU) and the
+  // 30s cache TTL keeps these round-trips rare.
+  'echo "@@CPU@@" $(c1=$(head -1 /proc/stat 2>/dev/null); sleep 1; c2=$(head -1 /proc/stat 2>/dev/null); echo "$c1|$c2")',
   'echo "@@MEM@@" $(grep -E "^MemTotal:|^MemAvailable:" /proc/meminfo 2>/dev/null)',
   'echo "@@DISK@@" $(df -Pk / 2>/dev/null | tail -1)',
 ].join('\n');
@@ -76,6 +81,24 @@ function stripQuotes(x) { return typeof x === 'string' ? x.replace(/^"|"$/g, '')
 function str(x) { const s = typeof x === 'string' ? x.trim() : ''; return s || null; }
 function num(x) { const n = Number(x); return Number.isFinite(n) ? n : null; }
 function round(x, dp = 2) { return x == null ? null : Number(Number(x).toFixed(dp)); }
+
+// Busy CPU% from two aggregate /proc/stat 'cpu' samples joined by '|'. Fields after the 'cpu' tag are
+// user nice system idle iowait irq softirq steal …; idle+iowait are the not-busy counters. A short or
+// unparsable sample yields null (never a fabricated 0).
+function cpuBusyPct(raw) {
+  const parts = String(raw || '').split('|');
+  if (parts.length < 2) return null;
+  const nums = (s) => String(s).trim().split(/\s+/).slice(1).map(Number);
+  const a = nums(parts[0]);
+  const b = nums(parts[1]);
+  if (a.length < 5 || b.length < 5 || a.some(Number.isNaN) || b.some(Number.isNaN)) return null;
+  const total = (x) => x.reduce((p, q) => p + (Number.isFinite(q) ? q : 0), 0);
+  const idle = (x) => (x[3] || 0) + (x[4] || 0);
+  const dt = total(b) - total(a);
+  const di = idle(b) - idle(a);
+  if (dt <= 0) return null;
+  return round(Math.max(0, Math.min(100, (1 - di / dt) * 100)), 1);
+}
 
 // Turn the probe's stdout into a map of KEY -> raw line value (text after the marker).
 export function parseRecords(stdout) {
@@ -119,6 +142,7 @@ export function normalizeHost(rec, env) {
 
   const loads = String(rec.LOAD || '').trim().split(/\s+/).filter(Boolean).slice(0, 3).map((v) => round(num(v), 2));
   const uptimeSeconds = num(rec.UPTIME);
+  const cpuPct = cpuBusyPct(rec.CPU);
 
   // Public IP: the address the whole dashboard already dials is env.SFTP_HOST; report that as the
   // server's public IP (accurate and what the owner expects). `hostname -I` often lists the public
@@ -155,6 +179,7 @@ export function normalizeHost(rec, env) {
       load5: loads[1] ?? null,
       load15: loads[2] ?? null,
       cores,
+      cpuPct,
       memory: mem,
       disk,
     },
@@ -250,6 +275,103 @@ export function createHostCache({ readCache, writeCache, now = () => Date.now(),
   }
 
   return { load, _good: good, _inflight: inflight };
+}
+
+// ---------- up/down + metric sample history ----------
+// We persist a rolling ring of small samples so "did the server go up or down, and when" is answered
+// with REAL observations rather than a guess. It reuses the same D1 `cache` table (no migration) under
+// a dedicated key; the row's `at` is refreshed on every write, so the cron's 12h prune never drops it.
+// Samples are appended from the scheduled job (every ~30 min, so brief outages are caught even with no
+// visitors) and from on-demand reads (throttled by the caller). Nothing is invented: uptime is derived
+// strictly from the samples we actually have, and before enough accumulate we report "collecting".
+export const HISTORY_KEY = 'sm:history';
+export const HISTORY_WINDOW_MS = 8 * 24 * 3600e3; // keep ~8 days so a 7d view is always covered
+export const SAMPLE_MAX = 2000;                    // hard cap on ring length regardless of window
+
+export function toSample(host, at) {
+  const m = (host && host.metrics) || {};
+  return {
+    t: at,
+    up: true,
+    cpu: m.cpuPct ?? null,
+    load1: m.load1 ?? null,
+    memPct: m.memory?.usedPct ?? null,
+    diskPct: m.disk?.usedPct ?? null,
+  };
+}
+
+export function downSample(at) { return { t: at, up: false, cpu: null, load1: null, memPct: null, diskPct: null }; }
+
+// Read-modify-write the ring; returns the trimmed sample list. Never throws on a storage hiccup so a
+// monitoring read still succeeds even if history can't be persisted this time.
+export async function appendSample({ readCache, writeCache }, sample, { now = Date.now(), maxAge = HISTORY_WINDOW_MS, max = SAMPLE_MAX } = {}) {
+  if (!sample || !Number.isFinite(sample.t)) return [];
+  const snap = await Promise.resolve(readCache ? readCache(HISTORY_KEY) : null).catch(() => null);
+  const list = Array.isArray(snap?.data?.samples) ? snap.data.samples : [];
+  const floor = now - maxAge;
+  const merged = list
+    .concat([sample])
+    .filter((x) => x && Number.isFinite(x.t) && x.t >= floor)
+    .sort((a, b) => a.t - b.t);
+  const capped = merged.length > max ? merged.slice(merged.length - max) : merged;
+  const at = capped.length ? capped[capped.length - 1].t : now;
+  try { if (writeCache) await writeCache(HISTORY_KEY, { at, data: { samples: capped } }); } catch { /* non-fatal */ }
+  return capped;
+}
+
+export async function loadSamples({ readCache }) {
+  const snap = await Promise.resolve(readCache ? readCache(HISTORY_KEY) : null).catch(() => null);
+  return Array.isArray(snap?.data?.samples) ? snap.data.samples : [];
+}
+
+// Time-weighted uptime over [from,to]: each sample's status holds until the next sample (or `to`).
+// Returns null when there is no coverage in the window (honest "no data yet", never a fake 100%).
+function uptimeOver(samples, from, to) {
+  if (to <= from) return null;
+  const seg = samples.filter((x) => x.t <= to).sort((a, b) => a.t - b.t);
+  if (!seg.length) return null;
+  const pts = seg.concat([{ t: to, up: !!seg[seg.length - 1].up }]); // hold last status to window end
+  let coverage = 0, up = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    const start = Math.max(a.t, from), end = Math.min(b.t, to);
+    if (end > start) { coverage += end - start; if (a.up) up += end - start; }
+  }
+  if (coverage <= 0) return null;
+  return { pct: round((up / coverage) * 100, 2), coverageMs: coverage };
+}
+
+// Build the whole health view from a raw sample list. Pure + fully unit-testable.
+export function buildHealth(samples, now = Date.now()) {
+  const s = Array.isArray(samples) ? samples.filter((x) => x && Number.isFinite(x.t)).sort((a, b) => a.t - b.t) : [];
+  const last = s.length ? s[s.length - 1] : null;
+  const day = 24 * 3600e3;
+  // up/down transitions (status flips), most-recent first
+  const events = [];
+  for (let i = 1; i < s.length; i++) {
+    if (!!s[i].up !== !!s[i - 1].up) events.push({ t: s[i].t, up: !!s[i].up });
+  }
+  events.reverse();
+  return {
+    hasData: s.length > 0,
+    count: s.length,
+    status: last ? (last.up ? 'up' : 'down') : 'unknown',
+    lastSampleAt: last ? last.t : null,
+    current: last ? { cpu: last.cpu ?? null, load1: last.load1 ?? null, memPct: last.memPct ?? null, diskPct: last.diskPct ?? null } : null,
+    uptime: { '24h': uptimeOver(s, now - day, now), '7d': uptimeOver(s, now - 7 * day, now) },
+    events: events.slice(0, 30),
+    // 24h strip for the UI: fixed buckets of up/down/unknown so the bar length never depends on cadence
+    strip: (() => {
+      const BUCKETS = 48, size = day / BUCKETS, start = now - day;
+      const out = new Array(BUCKETS).fill(null);
+      for (const x of s) {
+        if (x.t < start || x.t > now) continue;
+        const idx = Math.min(BUCKETS - 1, Math.floor((x.t - start) / size));
+        out[idx] = x.up ? 1 : 0;
+      }
+      return out; // 1 up, 0 down, null = no observation for that bucket
+    })(),
+  };
 }
 
 // ---------- settings (pure validation, shared by the route and tests) ----------

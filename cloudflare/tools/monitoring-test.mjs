@@ -44,6 +44,8 @@ const PROBE_STDOUT = [
   '@@UPTIME@@ 123456',
   '@@LOAD@@ 0.42 0.31 0.20 1/123 4567',
   '@@CORES@@ 2',
+  // two /proc/stat 'cpu' samples ~1s apart joined by '|'; designed so busy% = 25.0
+  '@@CPU@@ cpu 10 0 10 70 10 0 0 0 0 0|cpu 20 0 25 140 15 0 0 0 0 0',
   '@@MEM@@ MemTotal: 4096000 kB MemAvailable: 1024000 kB',
   '@@DISK@@ /dev/vda1 31457280 12582912 18874368 40% /',
 ].join('\n');
@@ -125,6 +127,7 @@ await test('normalizeHost: full probe -> real metrics, GB/MB, ips, provider', ()
   const m = h.metrics;
   assert.equal(m.uptimeSeconds, 123456);
   assert.equal(m.load1, 0.42); assert.equal(m.load5, 0.31); assert.equal(m.load15, 0.2);
+  assert.equal(m.cpuPct, 25); // (1 - 75/100) * 100 over the sample delta
   assert.equal(m.cores, 2);
   assert.equal(m.memory.totalMb, 4000);
   assert.equal(m.memory.availMb, 1000);
@@ -154,6 +157,7 @@ await test('normalizeHost: missing sources are null, never a fabricated 0', () =
   assert.equal(h.diskGb, null);
   assert.equal(h.metrics.uptimeSeconds, null);
   assert.equal(h.metrics.load1, null);
+  assert.equal(h.metrics.cpuPct, null);
   assert.equal(h.metrics.memory.usedPct, null);
   assert.equal(h.metrics.disk.totalGb, null);
   for (const v of [h.vcpus, h.memoryGb, h.diskGb, h.metrics.load1]) assert.notEqual(v, 0);
@@ -272,6 +276,95 @@ await test('cache: snapshot-write failure -> live data + snapshotSaved:false', a
   assert.equal(r.snapshotSaved, false);
 });
 
+// ---------- sample shapes ----------
+await test('toSample / downSample: capture metrics from a host, nulls on down', () => {
+  const host = sf.normalizeHost(sf.parseRecords(PROBE_STDOUT), ENV);
+  const NOW = 1700000000000;
+  const s = sf.toSample(host, NOW);
+  assert.equal(s.up, true);
+  assert.equal(s.t, NOW);
+  assert.equal(s.cpu, 25);
+  assert.equal(s.load1, 0.42);
+  assert.equal(s.memPct, 75);
+  assert.equal(s.diskPct, 40);
+  assert.deepEqual(sf.downSample(NOW), { t: NOW, up: false, cpu: null, load1: null, memPct: null, diskPct: null });
+});
+
+// ---------- appendSample / loadSamples (D1 cache ring) ----------
+await test('appendSample: stores, orders, prunes stale window, survives no write errors', async () => {
+  const NOW = 1700000000000;
+  const day = 86400000;
+  const store = fakeStore();
+  const hist = { readCache: store.readCache, writeCache: store.writeCache };
+  await sf.appendSample(hist, { t: NOW - 1000, up: true, cpu: 10 }, { now: NOW });
+  let l = await sf.loadSamples(hist);
+  assert.equal(l.length, 1);
+  // an older-than-window sample is filtered out
+  await sf.appendSample(hist, { t: NOW - 9 * day, up: true }, { now: NOW });
+  l = await sf.loadSamples(hist);
+  assert.equal(l.length, 1);
+  // multiple samples stay sorted by time
+  await sf.appendSample(hist, { t: NOW - 500, up: false }, { now: NOW });
+  l = await sf.loadSamples(hist);
+  assert.equal(l.length, 2);
+  assert.ok(l[0].t < l[1].t);
+  assertNoSecret(store._map.get(sf.HISTORY_KEY), 'history row');
+});
+
+await test('appendSample: write failure is swallowed (history is best-effort)', async () => {
+  const store = fakeStore({}, { failWrite: true });
+  const hist = { readCache: store.readCache, writeCache: store.writeCache };
+  const res = await sf.appendSample(hist, { t: Date.now(), up: true }, { now: Date.now() });
+  assert.ok(Array.isArray(res)); // returns the in-memory list even when the write fails
+});
+
+// ---------- buildHealth (pure, deterministic) ----------
+await test('buildHealth: empty -> unknown, no uptime, blank strip', () => {
+  const NOW = 1700000000000;
+  const b = sf.buildHealth([], NOW);
+  assert.equal(b.hasData, false);
+  assert.equal(b.status, 'unknown');
+  assert.equal(b.count, 0);
+  assert.equal(b.uptime['24h'], null);
+  assert.equal(b.uptime['7d'], null);
+  assert.deepEqual(b.events, []);
+  assert.equal(b.strip.length, 48);
+  assert.ok(b.strip.every((v) => v === null));
+});
+
+await test('buildHealth: all-up window -> 100% with honest coverage', () => {
+  const day = 86400000, hr = 3600000;
+  const NOW = 1700000000000;
+  const b = sf.buildHealth([{ t: NOW - 6 * hr, up: true }, { t: NOW - hr, up: true }], NOW);
+  assert.equal(b.status, 'up');
+  assert.equal(b.uptime['24h'].pct, 100);
+  assert.equal(b.uptime['24h'].coverageMs, 6 * hr); // only the observed span counts, never the empty 18h
+  assert.deepEqual(b.events, []);
+});
+
+await test('buildHealth: half up / half down -> 50% + a down event', () => {
+  const day = 86400000, hr = 3600000;
+  const NOW = 1700000000000;
+  const b = sf.buildHealth([{ t: NOW - day, up: true }, { t: NOW - 12 * hr, up: false }], NOW);
+  assert.equal(b.status, 'down');
+  assert.equal(b.uptime['24h'].pct, 50);
+  assert.equal(b.uptime['24h'].coverageMs, day);
+  assert.equal(b.events.length, 1);
+  assert.equal(b.events[0].up, false);
+  assert.equal(b.strip[0], 1);   // oldest bucket was up
+  assert.equal(b.strip[24], 0);  // middle bucket (12h back) went down
+});
+
+await test('buildHealth: transitions list is most-recent-first', () => {
+  const NOW = 1700000000000;
+  const b = sf.buildHealth([
+    { t: NOW - 300000, up: true }, { t: NOW - 200000, up: false }, { t: NOW - 100000, up: true },
+  ], NOW);
+  assert.equal(b.events.length, 2);
+  assert.equal(b.events[0].up, true); // the later flip first
+  assert.equal(b.events[1].up, false);
+});
+
 // ---------- settings validation ----------
 await test('settings: defaults shape + empty round-trip returns defaults', () => {
   assert.deepEqual(sf.DEFAULT_SETTINGS, { refreshSeconds: 60, defaultRange: '7d', regionFilter: '', notify: { email: false } });
@@ -314,7 +407,7 @@ await test('settings: describeSettingsChange is non-sensitive + no secrets', () 
 
 // ---------- regression / surface ----------
 await test('regression: module exposes the helpers the routes rely on and holds no secret', () => {
-  for (const fn of ['hasCreds', 'statusBlock', 'parseRecords', 'normalizeHost', 'collectHost', 'getHost', 'createHostCache', 'validateSettings', 'describeSettingsChange', 'parseId']) {
+  for (const fn of ['hasCreds', 'statusBlock', 'parseRecords', 'normalizeHost', 'collectHost', 'getHost', 'createHostCache', 'toSample', 'downSample', 'appendSample', 'loadSamples', 'buildHealth', 'validateSettings', 'describeSettingsChange', 'parseId']) {
     assert.equal(typeof sf[fn], 'function', `${fn} should be exported`);
   }
   assert.ok(!('SFTP_PASS' in sf) && !('SFTP_USER' in sf) && !('SFTP_HOST' in sf), 'module never hardcodes credentials');

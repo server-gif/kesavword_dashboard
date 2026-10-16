@@ -878,7 +878,10 @@ a.btn { text-decoration: none; }
 .attribution a { color: inherit; }
 
 /* ---- server monitoring (over SSH) — theme-aware, built on existing tokens ---- */
-.sm-body { display: flex; flex-direction: column; gap: 16px; padding-top: 4px; }
+/* The toolbar stays pinned; .sm-body is the scroll container. .main is overflow:hidden, so without
+   flex:1 + min-height:0 + overflow:auto here, taller content (KPIs, health panel, tables) would be
+   clipped and the page would feel frozen with no scrollbar — matching the other views' .ov-body. */
+.sm-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 16px; padding-top: 4px; }
 .pad { padding: 16px 4px; }
 
 /* loading skeletons */
@@ -930,9 +933,27 @@ a.btn { text-decoration: none; }
 .sm-meta-k { color: var(--text-3); font-size: 13px; }
 .sm-meta-v { color: var(--text); word-break: break-word; }
 
+/* health & uptime (real collected samples only) */
+.sm-health { display: flex; flex-direction: column; gap: 14px; }
+.sm-strip { display: flex; gap: 2px; width: 100%; height: 34px; }
+.sm-seg { flex: 1 1 0; min-width: 3px; border-radius: 3px; background: var(--surface-2); }
+.sm-seg.up { background: color-mix(in srgb, var(--success, #2fa84f) 72%, var(--surface)); }
+.sm-seg.down { background: color-mix(in srgb, var(--danger, #d64545) 82%, var(--surface)); }
+.sm-seg.none { background: var(--hover); }
+.sm-uptime { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.sm-up-cell { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; background: var(--surface-2); }
+.sm-up-k { font-size: 12px; color: var(--text-3); }
+.sm-up-v { font-size: 20px; font-weight: 650; margin-top: 2px; }
+.sm-up-n { font-size: 11.5px; margin-top: 2px; }
+.sm-events { display: flex; flex-direction: column; gap: 6px; }
+.sm-event { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.sm-noevents, .sm-health-foot { font-size: 12px; }
+
 @media (max-width: 900px) {
   .sm-two { grid-template-columns: 1fr; }
   .sm-future-grid { grid-template-columns: 1fr; }
   .sm-search { min-width: 0; width: 100%; }
   .sm-meta-row { grid-template-columns: 1fr; gap: 2px; }
+  .sm-uptime { grid-template-columns: 1fr; }
+  .sm-strip { height: 26px; }
 }
