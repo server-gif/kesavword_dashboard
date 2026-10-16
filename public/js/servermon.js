@@ -42,16 +42,16 @@ function toolbar() {
   const activeFor = (k) => state.tab === k || (state.tab === 'server' && k === 'servers');
   const seg = h('div', { class: 'seg' }, ...tabs.map(([k, l]) =>
     h('button', { class: activeFor(k) ? 'active' : '', onclick: () => go(k) }, l)));
-  const updated = h('span', { class: 'ov-updated' }, state.meta && state.meta.refreshedAt ? `Updated ${timeAgo(state.meta.refreshedAt)}` : '');
+  const updated = h('span', { class: 'ov-updated', 'data-live': 'updated' }, state.meta && state.meta.refreshedAt ? `Updated ${timeAgo(state.meta.refreshedAt)}` : '');
   const refresh = h('button', { class: 'icon-btn', title: 'Refresh now \u2014 re-read the server over SSH', 'data-tip': 'Refresh now', onclick: () => refreshNow() }, icon('refresh', 16));
 
   const parts = [seg, h('span', { class: 'spacer' })];
   if (canLive()) {
     const pill = h('span', { class: 'live-pill' },
-      h('span', { class: `live-dot${state.live ? ' on' : ''}` }),
-      h('span', {}, state.live ? 'Live' : 'Paused'),
-      h('span', { class: 'live-count' }, ''));
-    const btn = h('button', { class: 'btn btn-sm', title: state.live ? 'Pause automatic refresh' : 'Resume automatic refresh', onclick: () => toggleLive() }, state.live ? 'Pause' : 'Go live');
+      h('span', { class: `live-dot${state.live ? ' on' : ''}`, 'data-live': 'live-dot' }),
+      h('span', { 'data-live': 'live-state' }, state.live ? 'Live' : 'Paused'),
+      h('span', { class: 'live-count', 'data-live': 'next' }, ''));
+    const btn = h('button', { class: 'btn btn-sm', 'data-live': 'live-btn', title: state.live ? 'Pause automatic refresh' : 'Resume automatic refresh', onclick: () => toggleLive() }, state.live ? 'Pause' : 'Go live');
     parts.push(pill, btn);
   }
   parts.push(updated, refresh);
@@ -88,7 +88,10 @@ function metaBanners() {
 
 function draw(content) {
   const root = $('view-servermon');
+  const prev = root.querySelector('.sm-body')?.scrollTop || 0;
   root.replaceChildren(toolbar(), h('div', { class: 'sm-body' }, ...content));
+  const body = root.querySelector('.sm-body');
+  if (body && prev) body.scrollTop = prev; // keep position on any full redraw
 }
 
 // ---------- data loading ----------
@@ -145,48 +148,61 @@ function startLive() {
   clearTimers();
   nextAt = Date.now() + liveInterval();
   pollTimer = setInterval(() => { liveTick(); }, liveInterval());
-  clockTimer = setInterval(updateClock, 1000);
-  updateClock();
+  clockTimer = setInterval(syncLiveChrome, 1000);
+  syncLiveChrome();
 }
 function stopLive() { state.live = false; clearTimers(); nextAt = 0; }
-function renderLive() {
-  if (state.tab === 'overview') draw(overviewView(state.status));
-  else if (state.tab === 'servers') draw(serversView());
-  else if (state.tab === 'server') detailView().then(draw).catch(() => {});
+// The host whose numbers drive the current view: the detail server, or the overview/servers host.
+function currentHost() {
+  const list = state.servers || [];
+  if (state.tab === 'server') return list.find((s) => String(s.id) === String(state.server)) || (state.meta && state.meta.host) || null;
+  return (state.meta && state.meta.host) || list[0] || null;
 }
+// Live tick re-reads the server over SSH, then updates values IN PLACE (applyLive) — the page
+// structure, the trend chart and the health panel are touched only when a genuinely new sample
+// arrives, so counts moving never rebuild the view and the scroll position stays put (no jump).
 async function liveTick() {
   if (!state.live || !canLive()) return;
   const view = $('view-servermon');
   if (view && view.classList.contains('hidden')) { clearTimers(); return; } // navigated away
+  if (inputFocused()) { nextAt = Date.now() + liveInterval(); return; }      // don't disturb typing
   try {
-    if (state.tab === 'server') {
-      const content = await detailView();
-      if (state.live && state.tab === 'server' && !inputFocused()) draw(content);
-    } else {
-      await getServers(true);
-      await getHealth(true).catch(() => {});
-      if (state.live && !inputFocused() && state.tab !== 'server') renderLive();
-    }
+    await getServers(true);
+    await getHealth(true).catch(() => {});
+    const host = currentHost();
+    if (state.live && canLive() && host) applyLive(host, state.health);
   } catch { /* transient SSH miss: keep the last good reading, retry next tick */ }
   nextAt = Date.now() + liveInterval();
+  syncLiveChrome();
 }
-function updateClock() {
-  const el = document.querySelector('.live-count');
-  if (!el) return;
-  el.textContent = state.live && nextAt ? ` \u00b7 next ${Math.max(0, Math.round((nextAt - Date.now()) / 1000))}s` : '';
+// Update the live pill / pause button / countdown without re-rendering the body.
+function syncLiveChrome() {
+  const dot = liveEl('live-dot');
+  if (dot) dot.classList.toggle('on', !!state.live);
+  setLive('live-state', state.live ? 'Live' : 'Paused');
+  const btn = liveEl('live-btn');
+  if (btn) {
+    const want = state.live ? 'Pause' : 'Go live';
+    if (btn.textContent !== want) btn.textContent = want;
+    btn.title = state.live ? 'Pause automatic refresh' : 'Resume automatic refresh';
+  }
+  const next = liveEl('next');
+  if (next) next.textContent = state.live && nextAt ? ` \u00b7 next ${Math.max(0, Math.round((nextAt - Date.now()) / 1000))}s` : '';
 }
 async function toggleLive() {
-  if (state.live) { state.live = false; clearTimers(); nextAt = 0; renderLive(); return; }
+  if (state.live) { state.live = false; clearTimers(); nextAt = 0; syncLiveChrome(); return; }
   state.live = true;
   await getSettings().catch(() => {});
   startLive();
   await liveTick();
+  syncLiveChrome();
 }
 
 // ---------- entry ----------
 
 async function drawTab(fresh = false) {
   clearTimers(); // stop any previous schedule; re-armed below for live tabs
+  refs = {};     // fresh live-update handles for this tab render
   draw([loadingBar(), skeleton()]);
   let content;
   try {
@@ -232,6 +248,95 @@ function humanUptime(sec) {
   return d ? `${d}d ${hr}h` : hr ? `${hr}h ${mn}m` : `${mn}m`;
 }
 
+// ---------- in-place live update (no full rebuild → no scroll jump / down-up flicker) ----------
+// Values are tagged with data-live / data-slot during render; applyLive() mutates only what changed.
+let refs = {};
+const viewRoot = () => $('view-servermon');
+const liveEl = (key) => viewRoot().querySelector(`[data-live="${key}"]`);
+const slotEl = (name) => viewRoot().querySelector(`[data-slot="${name}"]`);
+function setLive(key, text) {
+  const el = liveEl(key);
+  if (!el) return;
+  const s = text == null ? '' : String(text);
+  if (el.textContent !== s) el.textContent = s;
+}
+function normPct(x) { const n = Number(x); return (x == null || !Number.isFinite(n)) ? null : Math.max(0, Math.min(100, n)); }
+// Signature that changes only when a genuinely new up/down sample arrives, so the trend/health cards
+// are rebuilt then and not on every numeric-only tick.
+function healthSig(health) { const hd = health || {}; return `${hd.count || 0}|${hd.status || ''}|${hd.lastSampleAt || 0}`; }
+
+// local KPI tile mirroring charts.js tile() but with a tagged value node for live updates
+function kpiTile(key, label, valueText, sub, title) {
+  return h('div', { class: 'kpi', title: title || null },
+    h('div', { class: 'kpi-label' }, label),
+    h('div', { class: 'kpi-value', 'data-live': `v-${key}` }, valueText == null ? '—' : String(valueText)),
+    sub);
+}
+function kpiDelta(key, text) { return h('div', { class: 'kpi-delta', 'data-live': `v-${key}` }, text == null ? '' : String(text)); }
+
+function meter(key, name, pct, detail) {
+  const p = normPct(pct);
+  return h('div', { class: 'barlist-row', title: `${name}: ${p == null ? 'not available' : p + '%'}` },
+    h('div', { class: 'barlist-label' }, h('span', {}, name)),
+    h('div', { class: 'barlist-track' }, h('span', { class: `barlist-bar${p != null && p >= 85 ? ' hot' : ''}`, 'data-live': `m-${key}-bar`, style: `width:${p == null ? 0 : p}%` })),
+    h('div', { class: 'barlist-value' },
+      h('span', { 'data-live': `m-${key}-v` }, p == null ? '—' : `${p}%`),
+      detail ? h('span', { class: 'muted', 'data-live': `m-${key}-d` }, ` \u00b7 ${detail}`) : null));
+}
+function applyMeter(key, pct, detail) {
+  const p = normPct(pct);
+  const bar = liveEl(`m-${key}-bar`);
+  if (bar) { bar.style.width = `${p == null ? 0 : p}%`; bar.classList.toggle('hot', p != null && p >= 85); }
+  setLive(`m-${key}-v`, p == null ? '—' : `${p}%`);
+  if (detail != null) setLive(`m-${key}-d`, ` \u00b7 ${detail}`);
+}
+function applyMeters(host) {
+  const m = (host && host.metrics) || {};
+  const mem = m.memory || {};
+  const disk = m.disk || {};
+  applyMeter('cpu', m.cpuPct, m.cores != null ? `busy of ${m.cores} core${m.cores === 1 ? '' : 's'}` : null);
+  applyMeter('mem', mem.usedPct, mem.totalMb != null ? `${round1((mem.usedMb || 0) / 1024)} / ${round1(mem.totalMb / 1024)} GB used` : null);
+  applyMeter('disk', disk.usedPct, disk.totalGb != null ? `${round1(disk.usedGb)} / ${round1(disk.totalGb)} GB used` : null);
+}
+
+// The single live-refresh routine for Overview / Servers / Detail. Each setLive is a no-op where the
+// node isn't present, so one call safely updates whichever tab is showing. The trend chart and health
+// panel are re-rendered only when a genuinely new sample arrived (their signature changes), so a tick
+// that only moves CPU/mem numbers never touches the charts or the page height.
+function applyLive(host, health) {
+  const m = (host && host.metrics) || {};
+  setLive('v-uptime', dash(humanUptime(m.uptimeSeconds)));
+  setLive('v-load1', m.load1 != null ? String(m.load1) : '—');
+  setLive('v-cpu', m.cpuPct != null ? `${m.cpuPct}%` : '—');
+  setLive('v-mem', m.memory && m.memory.usedPct != null ? `${m.memory.usedPct}%` : '—');
+  setLive('v-disk', m.disk && m.disk.usedPct != null ? `${m.disk.usedPct}%` : '—');
+  if (m.memory && m.memory.totalMb != null) setLive('v-memsub', `${round1((m.memory.usedMb || 0) / 1024)}/${round1(m.memory.totalMb / 1024)} GB`);
+  if (m.disk && m.disk.totalGb != null) setLive('v-disksub', `${round1(m.disk.usedGb)}/${round1(m.disk.totalGb)} GB`);
+  // detail spec dynamic cells
+  setLive('s-status', host.status || 'unknown');
+  setLive('s-cpu', m.cpuPct != null ? `${m.cpuPct}%` : '—');
+  setLive('s-load', m.load1 != null ? `${m.load1} / ${m.load5} / ${m.load15}` : '—');
+  setLive('s-uptime', humanUptime(m.uptimeSeconds) || '—');
+  setLive('s-mem', (m.memory && m.memory.totalMb != null) ? `${round1((m.memory.usedMb || 0) / 1024)} / ${round1(m.memory.totalMb / 1024)} GB${m.memory.usedPct != null ? ` (${m.memory.usedPct}% used)` : ''}` : '—');
+  setLive('s-disk', (m.disk && m.disk.totalGb != null) ? `${round1(m.disk.usedGb)} / ${round1(m.disk.totalGb)} GB${m.disk.usedPct != null ? ` (${m.disk.usedPct}% used)` : ''}` : '—');
+  // servers table row (single host) status + uptime
+  setLive('r-status', host.status || 'unknown');
+  setLive('r-uptime', humanUptime(m.uptimeSeconds) || '—');
+  applyMeters(host);
+  const hd = health || {};
+  const sig = healthSig(hd);
+  if (refs.sig !== sig) {
+    refs.sig = sig;
+    const cs = slotEl('chart'); if (cs) cs.replaceChildren(trendCard(hd));
+    const hs = slotEl('health'); if (hs) hs.replaceChildren(healthPanel(hd));
+    setLive('s-up24', hd.uptime && hd.uptime['24h'] ? `${uptimeText(hd.uptime['24h'])} (${coverageNote(hd.uptime['24h'])})` : '—');
+    setLive('s-up7', hd.uptime && hd.uptime['7d'] ? `${uptimeText(hd.uptime['7d'])} (${coverageNote(hd.uptime['7d'])})` : '—');
+  }
+  setLive('updated', state.meta && state.meta.refreshedAt ? `Updated ${timeAgo(state.meta.refreshedAt)}` : '');
+  setLive('source', `Source: ${(state.meta && state.meta.source) || '—'}${state.meta && state.meta.refreshedAt ? ` \u00b7 ${fmtDate(state.meta.refreshedAt)}` : ''}`);
+  return true;
+}
+
 // ---------- overview ----------
 
 function overviewView(status) {
@@ -242,12 +347,12 @@ function overviewView(status) {
 
   const m = host.metrics || {};
   out.push(h('div', { class: 'kpis' },
-    tile('Connection', status && status.connected ? 'Verified' : 'Live', h('div', { class: 'kpi-delta' }, host.hostname ? `read from ${host.hostname}` : 'read over SSH')),
-    tile('Uptime', dash(humanUptime(m.uptimeSeconds)), h('div', { class: 'kpi-delta' }, 'continuous since boot')),
-    tile('Load (1 min)', m.load1 != null ? String(m.load1) : '—', m.cores != null ? h('div', { class: 'kpi-delta' }, `${m.cores} core${m.cores === 1 ? '' : 's'}`) : null),
-    tile('CPU', m.cpuPct != null ? `${m.cpuPct}%` : '—', m.cores != null ? h('div', { class: 'kpi-delta' }, `busy of ${m.cores} core${m.cores === 1 ? '' : 's'}`) : null),
-    tile('Memory', m.memory && m.memory.usedPct != null ? `${m.memory.usedPct}%` : '—', m.memory && m.memory.totalMb != null ? h('div', { class: 'kpi-delta' }, `${round1((m.memory.usedMb || 0) / 1024)}/${round1(m.memory.totalMb / 1024)} GB`) : null),
-    tile('Disk', m.disk && m.disk.usedPct != null ? `${m.disk.usedPct}%` : '—', m.disk && m.disk.totalGb != null ? h('div', { class: 'kpi-delta' }, `${round1(m.disk.usedGb)}/${round1(m.disk.totalGb)} GB`) : null)));
+    kpiTile('conn', 'Connection', status && status.connected ? 'Verified' : 'Live', h('div', { class: 'kpi-delta' }, host.hostname ? `read from ${host.hostname}` : 'read over SSH')),
+    kpiTile('uptime', 'Uptime', dash(humanUptime(m.uptimeSeconds)), h('div', { class: 'kpi-delta' }, 'continuous since boot')),
+    kpiTile('load1', 'Load (1 min)', m.load1 != null ? String(m.load1) : '—', m.cores != null ? h('div', { class: 'kpi-delta' }, `${m.cores} core${m.cores === 1 ? '' : 's'}`) : null),
+    kpiTile('cpu', 'CPU', m.cpuPct != null ? `${m.cpuPct}%` : '—', m.cores != null ? h('div', { class: 'kpi-delta' }, `busy of ${m.cores} core${m.cores === 1 ? '' : 's'}`) : null),
+    kpiTile('mem', 'Memory', m.memory && m.memory.usedPct != null ? `${m.memory.usedPct}%` : '—', m.memory && m.memory.totalMb != null ? kpiDelta('memsub', `${round1((m.memory.usedMb || 0) / 1024)}/${round1(m.memory.totalMb / 1024)} GB`) : null),
+    kpiTile('disk', 'Disk', m.disk && m.disk.usedPct != null ? `${m.disk.usedPct}%` : '—', m.disk && m.disk.totalGb != null ? kpiDelta('disksub', `${round1(m.disk.usedGb)}/${round1(m.disk.totalGb)} GB`) : null)));
 
   out.push(h('div', { class: 'card sm-meta' },
     ...[
@@ -261,11 +366,13 @@ function overviewView(status) {
       h('div', { class: 'sm-meta-k' }, k),
       h('div', { class: 'sm-meta-v mono' }, typeof v === 'object' ? v : h('span', {}, v))))));
 
-  out.push(...usageCards(host, state.health));
-  out.push(healthPanel(state.health));
+  out.push(metersCard(host));
+  out.push(h('div', { class: 'sm-slot', 'data-slot': 'chart' }, trendCard(state.health)));
+  out.push(h('div', { class: 'sm-slot', 'data-slot': 'health' }, healthPanel(state.health)));
+  refs.sig = healthSig(state.health);
 
   out.push(futurePhaseNote('Everything above is read live from the server over SSH, and the usage trend and up/down history build from real checks — nothing is invented. Proactive alerting (email/other channels) and guided recovery actions arrive in later phases.'));
-  out.push(h('div', { class: 'table-foot' }, `Source: ${state.meta?.source || '—'}${state.meta?.refreshedAt ? ` · ${fmtDate(state.meta.refreshedAt)}` : ''}`));
+  out.push(h('div', { class: 'table-foot', 'data-live': 'source' }, `Source: ${state.meta?.source || '—'}${state.meta?.refreshedAt ? ` · ${fmtDate(state.meta.refreshedAt)}` : ''}`));
   return out;
 }
 
@@ -324,27 +431,21 @@ function healthPanel(health) {
 
 // ---------- resource usage: "how much of total" + real 24h trend ----------
 
-function meterRow(name, pct, detail) {
-  const p = (pct == null || !Number.isFinite(Number(pct))) ? null : Math.max(0, Math.min(100, Number(pct)));
-  return h('div', { class: 'barlist-row', title: `${name}: ${p == null ? 'not available' : p + '%'}` },
-    h('div', { class: 'barlist-label' }, h('span', {}, name)),
-    h('div', { class: 'barlist-track' }, h('span', { class: `barlist-bar${p != null && p >= 85 ? ' hot' : ''}`, style: `width:${p == null ? 0 : p}%` })),
-    h('div', { class: 'barlist-value' }, p == null ? '—' : `${p}%`, detail ? h('span', { class: 'muted' }, ` · ${detail}`) : null));
-}
-
-// Meters use live metrics (always available from the host); the trend chart uses only real samples.
-function usageCards(host, health) {
-  const out = [];
+// Meters use live metrics (always available from the host); tagged for in-place refresh.
+function metersCard(host) {
   const m = (host && host.metrics) || {};
   const mem = m.memory || {};
   const disk = m.disk || {};
-  out.push(h('div', { class: 'card ov-card' },
+  return h('div', { class: 'card ov-card' },
     h('div', { class: 'ov-card-head' }, h('div', {}, h('div', { class: 'ov-card-title' }, 'Resource usage'), h('div', { class: 'ov-card-sub' }, 'How much of the server\u2019s total each resource is using right now \u2014 read live over SSH.'))),
     h('div', { class: 'barlist' },
-      meterRow('CPU', m.cpuPct, m.cores != null ? `busy of ${m.cores} core${m.cores === 1 ? '' : 's'}` : null),
-      meterRow('Memory', mem.usedPct, mem.totalMb != null ? `${round1((mem.usedMb || 0) / 1024)} / ${round1(mem.totalMb / 1024)} GB used` : null),
-      meterRow('Disk', disk.usedPct, disk.totalGb != null ? `${round1(disk.usedGb)} / ${round1(disk.totalGb)} GB used` : null))));
+      meter('cpu', 'CPU', m.cpuPct, m.cores != null ? `busy of ${m.cores} core${m.cores === 1 ? '' : 's'}` : null),
+      meter('mem', 'Memory', mem.usedPct, mem.totalMb != null ? `${round1((mem.usedMb || 0) / 1024)} / ${round1(mem.totalMb / 1024)} GB used` : null),
+      meter('disk', 'Disk', disk.usedPct, disk.totalGb != null ? `${round1(disk.usedGb)} / ${round1(disk.totalGb)} GB used` : null)));
+}
 
+// The 24h trend chart is built only from real collected samples (no data yet -> an honest banner).
+function trendCard(health) {
   const series = (health && health.series) || [];
   const pts = series.map((b) => ({
     label: timeLabel(b.from),
@@ -354,8 +455,7 @@ function usageCards(host, health) {
   }));
   const withData = pts.filter((p) => p.raw.cpu.n || p.raw.mem.n || p.raw.disk.n);
   if (!withData.length) {
-    out.push(banner('info', 'Usage-over-time charts appear once enough automatic checks have been sampled (about every 30 minutes). Nothing is plotted until there is a real reading.'));
-    return out;
+    return banner('info', 'Usage-over-time charts appear once enough automatic checks have been sampled (about every 30 minutes). Nothing is plotted until there is a real reading.');
   }
   const chart = lineChart(pts, {
     ariaLabel: 'CPU, memory and disk usage over the last 24 hours',
@@ -375,8 +475,7 @@ function usageCards(host, health) {
     { label: 'Disk', num: true, get: (r) => (r.vals.disk == null ? '—' : `${r.vals.disk}%`) },
     { label: 'Readings', num: true, get: (r) => String(Math.max(r.raw.cpu.n, r.raw.mem.n, r.raw.disk.n)) },
   ]);
-  out.push(chartCard('Usage over time', 'Last 24 hours · hourly averages of the real SSH checks (a gap means nothing was sampled that hour)', chart, table));
-  return out;
+  return chartCard('Usage over time', 'Last 24 hours · hourly averages of the real SSH checks (a gap means nothing was sampled that hour)', chart, table);
 }
 
 // ---------- servers ----------
@@ -399,10 +498,12 @@ function filteredServers() {
   return out;
 }
 
-function statusPill(s) {
+function statusPill(s, liveKey) {
   const map = { running: 'badge-green', provision: 'badge-blue', provisioning: 'badge-blue', maintenance: 'badge-blue', suspended: 'badge-amber', stopped: 'badge-gray' };
   const key = String(s || '').toLowerCase();
-  return h('span', { class: `badge ${map[key] || 'badge-amber'}`, title: 'Status is whether the server answered over SSH (not application health)' }, s || 'unknown');
+  const props = { class: `badge ${map[key] || 'badge-amber'}`, title: 'Status is whether the server answered over SSH (not application health)' };
+  if (liveKey) props['data-live'] = liveKey;
+  return h('span', props, s || 'unknown');
 }
 
 function sortHeader(label, key, cls) {
@@ -434,8 +535,8 @@ function serversView() {
     h('td', {}, s.os || '—'),
     h('td', { class: 'mono' }, s.publicIp || h('span', { class: 'muted' }, 'none')),
     h('td', { class: 'mono' }, s.internalIp || h('span', { class: 'muted' }, '—')),
-    h('td', {}, statusPill(s.status)),
-    h('td', {}, (s.metrics && humanUptime(s.metrics.uptimeSeconds)) || '—')));
+    h('td', {}, statusPill(s.status, s === (state.servers && state.servers[0]) ? 'r-status' : null)),
+    h('td', { 'data-live': s === (state.servers && state.servers[0]) ? 'r-uptime' : null }, (s.metrics && humanUptime(s.metrics.uptimeSeconds)) || '—')));
 
   const table = servers.length
     ? h('table', { class: 'table' },
@@ -482,22 +583,26 @@ async function detailView() {
     ['Provider', server.provider || '—'],
     ['Operating system', server.os || '—'],
     ['Kernel', server.kernel || '—'],
-    ['Status', server.status || '—'],
+    ['Status', server.status || '—', 's-status'],
     ['Public IP', server.publicIp || '—'],
     ['Interface IP', server.internalIp || '—'],
     ['CPU cores', m.cores != null ? String(m.cores) : '—'],
-    ['CPU usage (now)', m.cpuPct != null ? `${m.cpuPct}%` : '—'],
-    ['Load (1/5/15 min)', m.load1 != null ? `${m.load1} / ${m.load5} / ${m.load15}` : '—'],
-    ['Uptime (this boot)', humanUptime(m.uptimeSeconds) || '—'],
-    ['Uptime · 24h', upCell('24h')],
-    ['Uptime · 7d', upCell('7d')],
-    ['Memory', (m.memory && m.memory.totalMb != null) ? `${round1((m.memory.usedMb || 0) / 1024)} / ${round1(m.memory.totalMb / 1024)} GB${m.memory.usedPct != null ? ` (${m.memory.usedPct}% used)` : ''}` : (server.memoryGb != null ? `${server.memoryGb} GB` : '—')],
-    [`Disk${m.disk && m.disk.mount ? ` (${m.disk.mount})` : ''}`, (m.disk && m.disk.totalGb != null) ? `${round1(m.disk.usedGb)} / ${round1(m.disk.totalGb)} GB${m.disk.usedPct != null ? ` (${m.disk.usedPct}% used)` : ''}` : (server.diskGb != null ? `${server.diskGb} GB` : '—')],
+    ['CPU usage (now)', m.cpuPct != null ? `${m.cpuPct}%` : '—', 's-cpu'],
+    ['Load (1/5/15 min)', m.load1 != null ? `${m.load1} / ${m.load5} / ${m.load15}` : '—', 's-load'],
+    ['Uptime (this boot)', humanUptime(m.uptimeSeconds) || '—', 's-uptime'],
+    ['Uptime · 24h', upCell('24h'), 's-up24'],
+    ['Uptime · 7d', upCell('7d'), 's-up7'],
+    ['Memory', (m.memory && m.memory.totalMb != null) ? `${round1((m.memory.usedMb || 0) / 1024)} / ${round1(m.memory.totalMb / 1024)} GB${m.memory.usedPct != null ? ` (${m.memory.usedPct}% used)` : ''}` : (server.memoryGb != null ? `${server.memoryGb} GB` : '—'), 's-mem'],
+    [`Disk${m.disk && m.disk.mount ? ` (${m.disk.mount})` : ''}`, (m.disk && m.disk.totalGb != null) ? `${round1(m.disk.usedGb)} / ${round1(m.disk.totalGb)} GB${m.disk.usedPct != null ? ` (${m.disk.usedPct}% used)` : ''}` : (server.diskGb != null ? `${server.diskGb} GB` : '—'), 's-disk'],
   ];
-  out.push(h('div', { class: 'card sm-meta' }, ...spec.map(([k, v]) =>
-    h('div', { class: 'sm-meta-row' }, h('div', { class: 'sm-meta-k' }, k), h('div', { class: 'sm-meta-v mono' }, String(v))))));
+  out.push(h('div', { class: 'card sm-meta' }, ...spec.map(([k, v, lk]) =>
+    h('div', { class: 'sm-meta-row' }, h('div', { class: 'sm-meta-k' }, k), h('div', { class: 'sm-meta-v mono', 'data-live': lk || null }, String(v))))));
 
-  out.push(...usageCards(server, state.health));
+  out.push(metersCard(server));
+  out.push(h('div', { class: 'sm-slot', 'data-slot': 'chart' }, trendCard(state.health)));
+  out.push(h('div', { class: 'sm-slot', 'data-slot': 'health' }, healthPanel(state.health)));
+  refs.sig = healthSig(state.health);
+
 
   out.push(h('div', { class: 'sm-future-grid' },
     ...[['Alerts', 'Threshold and health alerts sent to you.'],

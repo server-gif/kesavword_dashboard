@@ -893,6 +893,9 @@ a.btn { text-decoration: none; }
    flex:1 + min-height:0 + overflow:auto here, taller content (KPIs, health panel, tables) would be
    clipped and the page would feel frozen with no scrollbar — matching the other views' .ov-body. */
 .sm-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 16px; padding-top: 4px; }
+/* In-place live update wrappers: the trend chart and health panel sit inside these slots so a tick can
+   swap just the card without rebuilding the whole body (keeps height stable → no scroll jump). */
+.sm-slot { display: block; }
 .pad { padding: 16px 4px; }
 
 /* loading skeletons */
