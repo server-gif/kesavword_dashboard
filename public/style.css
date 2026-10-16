@@ -670,15 +670,17 @@ a.name:hover .name-text { color: var(--accent); }
 /* chart roles — validated with the dataviz palette checker against these surfaces */
 :root {
   --series-1: #2a78d6;
+  --series-2: #0f8a5f;
+  --series-3: #b5651d;
   --status-critical: #d03b3b;
   --chart-grid: #e8e9ef;
   --chart-axis: #c9ccd8;
   --good-text: #006300;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --series-1: #3987e5; --chart-grid: #222736; --chart-axis: #343a4d; --good-text: #3cc58a; }
+  :root:not([data-theme="light"]) { --series-1: #3987e5; --series-2: #3cc58a; --series-3: #e0a340; --chart-grid: #222736; --chart-axis: #343a4d; --good-text: #3cc58a; }
 }
-:root[data-theme="dark"] { --series-1: #3987e5; --chart-grid: #222736; --chart-axis: #343a4d; --good-text: #3cc58a; }
+:root[data-theme="dark"] { --series-1: #3987e5; --series-2: #3cc58a; --series-3: #e0a340; --chart-grid: #222736; --chart-axis: #343a4d; --good-text: #3cc58a; }
 
 .ov-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 14px; padding-bottom: 8px; transition: opacity .15s; }
 .ov-body.refreshing { opacity: .55; }
@@ -715,6 +717,8 @@ a.name:hover .name-text { color: var(--accent); }
 .chart-bar { transition: opacity .12s; }
 .chart-bar.dim { opacity: .35; }
 .chart-hit { fill: transparent; outline: none; cursor: default; }
+.chart-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart-dot { stroke: var(--surface); stroke-width: 1.2; }
 .chart-tip {
   position: absolute; z-index: 3; pointer-events: none; min-width: 150px; padding: 8px 10px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 9px; box-shadow: var(--shadow-lg); font-size: 12.5px;
@@ -842,6 +846,7 @@ a.name:hover .name-text { color: var(--accent); }
 .barlist-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .barlist-track { height: 8px; border-radius: 4px; background: var(--hover); overflow: hidden; }
 .barlist-bar { display: block; height: 100%; border-radius: 4px; background: var(--series-1); }
+.barlist-bar.hot { background: var(--status-critical); }
 .barlist-value { font-variant-numeric: tabular-nums; font-size: 12.5px; white-space: nowrap; text-align: right; min-width: 92px; }
 .empty-icon.spin .icon { animation: spin 1s linear infinite; }
 

@@ -341,8 +341,43 @@ function uptimeOver(samples, from, to) {
   return { pct: round((up / coverage) * 100, 2), coverageMs: coverage };
 }
 
+// Hourly series for the charts, built ONLY from samples we actually collected. Each bucket is the
+// average of the readings inside it; an hour with no reading stays null (never filled or smoothed).
+export function buildSeries(samples, now = Date.now(), buckets = 24) {
+  const s = Array.isArray(samples) ? samples.filter((x) => x && Number.isFinite(x.t)) : [];
+  const size = 3600e3, start = now - buckets * size;
+  const cell = () => ({ avg: null, max: null, n: 0 });
+  const grid = Array.from({ length: buckets }, () => ({ from: start + (buckets - 1) * size, cpu: cell(), mem: cell(), disk: cell(), load: cell() }));
+  for (const x of s) {
+    if (x.t < start || x.t > now) continue;
+    const idx = Math.min(buckets - 1, Math.floor((x.t - start) / size));
+    grid[idx].from = start + idx * size;
+    for (const [key, v] of [['cpu', x.cpu], ['mem', x.memPct], ['disk', x.diskPct], ['load', x.load1]]) {
+      if (typeof v !== 'number' || !Number.isFinite(v)) continue; // down samples carry nulls — skip, don't invent
+      const c = grid[idx][key];
+      c.avg = round((c.avg == null ? 0 : c.avg) * c.n / (c.n + 1) + v / (c.n + 1), 1);
+      c.max = c.max == null ? v : Math.max(c.max, v);
+      c.n++;
+    }
+  }
+  return grid;
+}
+
+// Capacity read from a host snapshot so the UI can phrase usage as "X of total". Only real, server-
+// reported numbers; anything missing stays null rather than a guessed default.
+export function hostTotals(host) {
+  const m = (host && host.metrics) || {};
+  return {
+    cores: m.cores ?? null,
+    memTotalGb: m.memory && m.memory.totalMb != null ? round(m.memory.totalMb / 1024, 1) : null,
+    diskTotalGb: m.disk && m.disk.totalGb != null ? round(m.disk.totalGb, 1) : null,
+  };
+}
+
 // Build the whole health view from a raw sample list. Pure + fully unit-testable.
-export function buildHealth(samples, now = Date.now()) {
+// `totals` (optional) is the live host's capacity (cores, memory GB, disk GB) so the UI can show
+// "how much of the total is used" next to percentages — values read from the server, never guessed.
+export function buildHealth(samples, now = Date.now(), totals = null) {
   const s = Array.isArray(samples) ? samples.filter((x) => x && Number.isFinite(x.t)).sort((a, b) => a.t - b.t) : [];
   const last = s.length ? s[s.length - 1] : null;
   const day = 24 * 3600e3;
@@ -360,6 +395,8 @@ export function buildHealth(samples, now = Date.now()) {
     current: last ? { cpu: last.cpu ?? null, load1: last.load1 ?? null, memPct: last.memPct ?? null, diskPct: last.diskPct ?? null } : null,
     uptime: { '24h': uptimeOver(s, now - day, now), '7d': uptimeOver(s, now - 7 * day, now) },
     events: events.slice(0, 30),
+    totals: totals || null,
+    series: buildSeries(s, now),
     // 24h strip for the UI: fixed buckets of up/down/unknown so the bar length never depends on cadence
     strip: (() => {
       const BUCKETS = 48, size = day / BUCKETS, start = now - day;

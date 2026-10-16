@@ -125,6 +125,95 @@ export function columnChart(points, { colorVar = '--series-1', ariaLabel, valueF
   return wrap;
 }
 
+// Multi-series line chart for time trends (CPU %, memory %, disk %). points: one entry per x bucket,
+// each { label, title, vals: { [key]: number|null } }; series: [{ key, name, colorVar }].
+// A null value is an honest gap (no reading that hour) — the line simply breaks, it is never filled.
+// yMax pins the axis top (100 for percentages) so trends are comparable across refreshes.
+export function lineChart(points, { series = [], ariaLabel, valueFormat = (v) => `${Math.round(v)}`, yMax, height = 220 } = {}) {
+  const wrap = h('div', { class: 'chart', role: 'img', 'aria-label': ariaLabel || '' });
+  const tip = h('div', { class: 'chart-tip hidden' });
+  wrap.append(tip);
+  const pad = { l: 44, r: 10, t: 16, b: 28 };
+
+  const draw = () => {
+    const W = wrap.clientWidth;
+    if (!W) return;
+    wrap.querySelector('svg')?.remove();
+    const H = height;
+    const svg = svgEl('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}` });
+    const plotW = W - pad.l - pad.r;
+    const plotH = H - pad.t - pad.b;
+    let top = yMax;
+    if (top == null) {
+      let mv = 0;
+      for (const p of points) for (const s of series) { const v = p.vals[s.key]; if (typeof v === 'number') mv = Math.max(mv, v); }
+      top = niceMax(mv);
+    }
+    top = Math.max(top, 1);
+    const n = points.length;
+    const x = (i) => pad.l + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+    const y = (v) => pad.t + plotH - (v / top) * plotH;
+
+    for (let i = 0; i <= 4; i++) {
+      const v = (top / 4) * i;
+      const yy = Math.round(y(v)) + 0.5;
+      svg.append(svgEl('line', { x1: pad.l, x2: W - pad.r, y1: yy, y2: yy, class: i === 0 ? 'chart-base' : 'chart-grid' }));
+      const t = svgEl('text', { x: pad.l - 8, y: yy + 4, 'text-anchor': 'end', class: 'chart-tick' });
+      t.textContent = valueFormat(v);
+      svg.append(t);
+    }
+
+    for (const s of series) {
+      let run = [];
+      const flush = () => { if (run.length > 1) svg.append(svgEl('polyline', { points: run.map((p) => p.join(',')).join(' '), class: 'chart-line', style: `stroke: var(${s.colorVar})` })); run = []; };
+      points.forEach((p, i) => {
+        const v = p.vals[s.key];
+        if (typeof v === 'number') run.push([x(i), y(v)]);
+        else flush(); // gap: no reading this bucket
+      });
+      flush();
+      points.forEach((p, i) => {
+        const v = p.vals[s.key];
+        if (typeof v !== 'number') return;
+        svg.append(svgEl('circle', { cx: x(i), cy: y(v), r: 2.4, class: 'chart-dot', style: `fill: var(${s.colorVar})` }));
+      });
+    }
+
+    const band = n > 1 ? plotW / (n - 1) : plotW;
+    const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(plotW / 72))));
+    points.forEach((p, i) => {
+      if (i % every === 0) {
+        const t = svgEl('text', { x: x(i), y: H - 8, 'text-anchor': 'middle', class: 'chart-tick' });
+        t.textContent = p.label;
+        svg.append(t);
+      }
+      const cx = x(i);
+      const hit = svgEl('rect', { x: cx - band / 2, y: pad.t, width: band, height: plotH, class: 'chart-hit', tabindex: 0 });
+      const show = () => {
+        tip.replaceChildren(
+          h('div', { class: 'tip-title' }, p.title || p.label),
+          ...series.map((s) => { const v = p.vals[s.key]; return h('div', { class: 'tip-row' }, h('span', { class: 'tip-key', style: `background: var(${s.colorVar})` }), h('b', {}, v == null ? '—' : `${round1(v)}%`), h('span', {}, s.name)); }));
+        tip.classList.remove('hidden');
+        const tw = tip.offsetWidth;
+        tip.style.left = `${Math.min(Math.max(cx - tw / 2, 0), W - tw)}px`;
+        const topv = Math.min(...series.map((s) => (typeof p.vals[s.key] === 'number' ? y(p.vals[s.key]) : pad.t + plotH)));
+        tip.style.top = `${Math.max(0, topv - tip.offsetHeight - 10)}px`;
+      };
+      const hide = () => tip.classList.add('hidden');
+      hit.addEventListener('pointerenter', show);
+      hit.addEventListener('focus', show);
+      hit.addEventListener('pointerleave', hide);
+      hit.addEventListener('blur', hide);
+      svg.append(hit);
+    });
+    wrap.prepend(svg);
+  };
+  new ResizeObserver(draw).observe(wrap);
+  return wrap;
+}
+
+const round1 = (x) => (x == null ? x : Math.round(x * 10) / 10);
+
 // Card with a Chart/Table toggle — every chart has a table twin.
 export function chartCard(title, subtitle, chart, table) {
   let asTable = false;

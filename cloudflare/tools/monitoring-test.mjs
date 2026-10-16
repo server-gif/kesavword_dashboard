@@ -365,6 +365,61 @@ await test('buildHealth: transitions list is most-recent-first', () => {
   assert.equal(b.events[1].up, false);
 });
 
+// ---------- time-series (built only from real samples) ----------
+await test('buildSeries: empty -> 24 buckets all null (never fabricated)', () => {
+  const NOW = 1700000000000;
+  const g = sf.buildSeries([], NOW);
+  assert.equal(g.length, 24);
+  assert.ok(g.every((b) => b.cpu.avg === null && b.cpu.n === 0 && b.mem.avg === null && b.disk.avg === null));
+});
+
+await test('buildSeries: averages readings within an hour and records the max', () => {
+  const NOW = 1700000000000;
+  const t = NOW - 1500000; // same hour for all three
+  const g = sf.buildSeries([
+    { t, cpu: 10, memPct: 50, diskPct: 40, load1: 0.5 },
+    { t: t + 20000, cpu: 30, memPct: 60, diskPct: 40, load1: 0.7 },
+    { t: t + 40000, cpu: 20, memPct: 70, diskPct: 40, load1: 0.6 },
+  ], NOW);
+  const bucket = g[23]; // most recent hour
+  assert.equal(bucket.cpu.n, 3);
+  assert.equal(bucket.cpu.avg, 20); // (10+30+20)/3
+  assert.equal(bucket.cpu.max, 30);
+  assert.equal(bucket.mem.avg, 60); // (50+60+70)/3
+  assert.equal(bucket.disk.avg, 40);
+});
+
+await test('buildSeries: down samples (null metrics) do not create a fake reading', () => {
+  const NOW = 1700000000000;
+  const g = sf.buildSeries([{ t: NOW - 60000, up: false, cpu: null, memPct: null, diskPct: null, load1: null }], NOW);
+  const last = g[23];
+  assert.equal(last.cpu.n, 0);
+  assert.equal(last.cpu.avg, null);
+  assert.equal(last.mem.avg, null);
+});
+
+await test('buildSeries: ignores samples older than the 24h window', () => {
+  const NOW = 1700000000000;
+  const g = sf.buildSeries([{ t: NOW - 30 * 3600000, cpu: 90, memPct: 90, diskPct: 90 }], NOW);
+  assert.ok(g.every((b) => b.cpu.n === 0));
+});
+
+await test('hostTotals: reports real capacity, null when absent', () => {
+  const host = { metrics: { cores: 2, memory: { totalMb: 4000 }, disk: { totalGb: 30 } } };
+  assert.deepEqual(sf.hostTotals(host), { cores: 2, memTotalGb: 3.9, diskTotalGb: 30 });
+  assert.deepEqual(sf.hostTotals(null), { cores: null, memTotalGb: null, diskTotalGb: null });
+  assert.deepEqual(sf.hostTotals({ metrics: {} }), { cores: null, memTotalGb: null, diskTotalGb: null });
+});
+
+await test('buildHealth: includes a 24-bucket series and passes totals through', () => {
+  const NOW = 1700000000000;
+  const b = sf.buildHealth([{ t: NOW - 60000, up: true, cpu: 12, memPct: 55, diskPct: 33, load1: 0.4 }], NOW, { cores: 2, memTotalGb: 3.9, diskTotalGb: 30 });
+  assert.equal(b.series.length, 24);
+  assert.equal(b.series[23].cpu.avg, 12);
+  assert.deepEqual(b.totals, { cores: 2, memTotalGb: 3.9, diskTotalGb: 30 });
+  assert.equal(sf.buildHealth([], NOW).totals, null);
+});
+
 // ---------- settings validation ----------
 await test('settings: defaults shape + empty round-trip returns defaults', () => {
   assert.deepEqual(sf.DEFAULT_SETTINGS, { refreshSeconds: 60, defaultRange: '7d', regionFilter: '', notify: { email: false } });
@@ -407,7 +462,7 @@ await test('settings: describeSettingsChange is non-sensitive + no secrets', () 
 
 // ---------- regression / surface ----------
 await test('regression: module exposes the helpers the routes rely on and holds no secret', () => {
-  for (const fn of ['hasCreds', 'statusBlock', 'parseRecords', 'normalizeHost', 'collectHost', 'getHost', 'createHostCache', 'toSample', 'downSample', 'appendSample', 'loadSamples', 'buildHealth', 'validateSettings', 'describeSettingsChange', 'parseId']) {
+  for (const fn of ['hasCreds', 'statusBlock', 'parseRecords', 'normalizeHost', 'collectHost', 'getHost', 'createHostCache', 'toSample', 'downSample', 'appendSample', 'loadSamples', 'buildHealth', 'buildSeries', 'hostTotals', 'validateSettings', 'describeSettingsChange', 'parseId']) {
     assert.equal(typeof sf[fn], 'function', `${fn} should be exported`);
   }
   assert.ok(!('SFTP_PASS' in sf) && !('SFTP_USER' in sf) && !('SFTP_HOST' in sf), 'module never hardcodes credentials');

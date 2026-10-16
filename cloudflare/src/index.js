@@ -971,11 +971,14 @@ app.get('/api/server-monitoring/servers/:id', async (c) => {
 });
 
 // Health & uptime: real up/down history derived only from the samples we actually collected.
+// Totals (cores / memory GB / disk GB) come from the last cached host snapshot so usage can read
+// "X of total" — this does not trigger a new probe; when nothing is cached the totals are simply null.
 app.get('/api/server-monitoring/health', async (c) => {
   const d = adminOnly(c); if (d) return d;
   if (!sf.hasCreds(cfg())) return c.json({ ...sf.buildHealth([]), unavailable: true });
   const samples = await sf.loadSamples(histStore);
-  return c.json(sf.buildHealth(samples));
+  const snap = await store.readCache(hostCacheKey).catch(() => null);
+  return c.json(sf.buildHealth(samples, Date.now(), sf.hostTotals(snap?.data?.host)));
 });
 
 app.get('/api/server-monitoring/settings', async (c) => {

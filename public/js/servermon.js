@@ -4,7 +4,7 @@
 // Metrics history, Health, Alerts and Recovery are shown only as clearly-labelled "future phase" panels —
 // no numbers, incidents or statuses are ever invented here; what you see is read live from the server.
 import { $, h, api, toast, icon, fmtDate, timeAgo, formModal } from './lib.js';
-import { tile, barList } from './charts.js';
+import { tile, lineChart, chartCard, simpleTable, timeLabel } from './charts.js';
 
 const S = 'server-monitoring';
 let state = blank();
@@ -183,9 +183,10 @@ function overviewView(status) {
       h('div', { class: 'sm-meta-k' }, k),
       h('div', { class: 'sm-meta-v mono' }, typeof v === 'object' ? v : h('span', {}, v))))));
 
+  out.push(...usageCards(host, state.health));
   out.push(healthPanel(state.health));
 
-  out.push(futurePhaseNote('Everything above is read live from the server over SSH, and the up/down history below builds from real checks — nothing is invented. Proactive alerting (email/other channels) and guided recovery actions arrive in later phases.'));
+  out.push(futurePhaseNote('Everything above is read live from the server over SSH, and the usage trend and up/down history build from real checks — nothing is invented. Proactive alerting (email/other channels) and guided recovery actions arrive in later phases.'));
   out.push(h('div', { class: 'table-foot' }, `Source: ${state.meta?.source || '—'}${state.meta?.refreshedAt ? ` · ${fmtDate(state.meta.refreshedAt)}` : ''}`));
   return out;
 }
@@ -241,6 +242,63 @@ function healthPanel(health) {
       h('div', { class: 'ov-card-sub' }, 'Current: ', statusDot(hd), h('span', { class: 'muted' }, ` · last check ${hd.lastSampleAt ? timeAgo(hd.lastSampleAt) : '—'}`)))),
     strip, upTiles, eventList,
     h('div', { class: 'muted sm-health-foot' }, '“Down” means the server did not answer an SSH check at that moment; it is not the same as your website being healthy.'));
+}
+
+// ---------- resource usage: "how much of total" + real 24h trend ----------
+
+function meterRow(name, pct, detail) {
+  const p = (pct == null || !Number.isFinite(Number(pct))) ? null : Math.max(0, Math.min(100, Number(pct)));
+  return h('div', { class: 'barlist-row', title: `${name}: ${p == null ? 'not available' : p + '%'}` },
+    h('div', { class: 'barlist-label' }, h('span', {}, name)),
+    h('div', { class: 'barlist-track' }, h('span', { class: `barlist-bar${p != null && p >= 85 ? ' hot' : ''}`, style: `width:${p == null ? 0 : p}%` })),
+    h('div', { class: 'barlist-value' }, p == null ? '—' : `${p}%`, detail ? h('span', { class: 'muted' }, ` · ${detail}`) : null));
+}
+
+// Meters use live metrics (always available from the host); the trend chart uses only real samples.
+function usageCards(host, health) {
+  const out = [];
+  const m = (host && host.metrics) || {};
+  const mem = m.memory || {};
+  const disk = m.disk || {};
+  out.push(h('div', { class: 'card ov-card' },
+    h('div', { class: 'ov-card-head' }, h('div', {}, h('div', { class: 'ov-card-title' }, 'Resource usage'), h('div', { class: 'ov-card-sub' }, 'How much of the server\u2019s total each resource is using right now \u2014 read live over SSH.'))),
+    h('div', { class: 'barlist' },
+      meterRow('CPU', m.cpuPct, m.cores != null ? `busy of ${m.cores} core${m.cores === 1 ? '' : 's'}` : null),
+      meterRow('Memory', mem.usedPct, mem.totalMb != null ? `${round1((mem.usedMb || 0) / 1024)} / ${round1(mem.totalMb / 1024)} GB used` : null),
+      meterRow('Disk', disk.usedPct, disk.totalGb != null ? `${round1(disk.usedGb)} / ${round1(disk.totalGb)} GB used` : null))));
+
+  const series = (health && health.series) || [];
+  const pts = series.map((b) => ({
+    label: timeLabel(b.from),
+    title: `${timeLabel(b.from)} \u2013 ${timeLabel(b.from + 3600000)}`,
+    vals: { cpu: b.cpu.avg, mem: b.mem.avg, disk: b.disk.avg },
+    raw: b,
+  }));
+  const withData = pts.filter((p) => p.raw.cpu.n || p.raw.mem.n || p.raw.disk.n);
+  if (!withData.length) {
+    out.push(banner('info', 'Usage-over-time charts appear once enough automatic checks have been sampled (about every 30 minutes). Nothing is plotted until there is a real reading.'));
+    return out;
+  }
+  const chart = lineChart(pts, {
+    ariaLabel: 'CPU, memory and disk usage over the last 24 hours',
+    yMax: 100,
+    valueFormat: (v) => `${Math.round(v)}%`,
+    series: [
+      { key: 'cpu', name: 'CPU', colorVar: '--series-1' },
+      { key: 'mem', name: 'Memory', colorVar: '--series-2' },
+      { key: 'disk', name: 'Disk', colorVar: '--series-3' },
+    ],
+  });
+  const table = simpleTable(withData, [
+    { label: 'Hour', get: (r) => r.label },
+    { label: 'CPU avg', num: true, get: (r) => (r.vals.cpu == null ? '—' : `${r.vals.cpu}%`) },
+    { label: 'CPU max', num: true, get: (r) => (r.raw.cpu.max == null ? '—' : `${r.raw.cpu.max}%`) },
+    { label: 'Memory', num: true, get: (r) => (r.vals.mem == null ? '—' : `${r.vals.mem}%`) },
+    { label: 'Disk', num: true, get: (r) => (r.vals.disk == null ? '—' : `${r.vals.disk}%`) },
+    { label: 'Readings', num: true, get: (r) => String(Math.max(r.raw.cpu.n, r.raw.mem.n, r.raw.disk.n)) },
+  ]);
+  out.push(chartCard('Usage over time', 'Last 24 hours · hourly averages of the real SSH checks (a gap means nothing was sampled that hour)', chart, table));
+  return out;
 }
 
 // ---------- servers ----------
@@ -360,6 +418,8 @@ async function detailView() {
   ];
   out.push(h('div', { class: 'card sm-meta' }, ...spec.map(([k, v]) =>
     h('div', { class: 'sm-meta-row' }, h('div', { class: 'sm-meta-k' }, k), h('div', { class: 'sm-meta-v mono' }, String(v))))));
+
+  out.push(...usageCards(server, state.health));
 
   out.push(h('div', { class: 'sm-future-grid' },
     ...[['Alerts', 'Threshold and health alerts sent to you.'],
