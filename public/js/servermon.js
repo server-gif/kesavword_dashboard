@@ -13,11 +13,12 @@ function blank() {
   return {
     tab: 'overview', server: null,
     status: null, servers: null, meta: null, health: null, settings: null,
+    live: true,
     q: '', region: '', statusSel: '', sort: { key: 'name', dir: 1 },
   };
 }
 
-export function resetServerMonitoring() { state = blank(); }
+export function resetServerMonitoring() { stopLive(); state = blank(); }
 
 export async function showServerMonitoring(params) {
   const tab = params.get('tab');
@@ -42,13 +43,24 @@ function toolbar() {
   const seg = h('div', { class: 'seg' }, ...tabs.map(([k, l]) =>
     h('button', { class: activeFor(k) ? 'active' : '', onclick: () => go(k) }, l)));
   const updated = h('span', { class: 'ov-updated' }, state.meta && state.meta.refreshedAt ? `Updated ${timeAgo(state.meta.refreshedAt)}` : '');
-  const refresh = h('button', { class: 'icon-btn', title: 'Refresh now', 'data-tip': 'Refresh now', onclick: () => refreshNow() }, icon('refresh', 16));
-  return h('div', { class: 'toolbar' }, seg, h('span', { class: 'spacer' }), updated, refresh);
+  const refresh = h('button', { class: 'icon-btn', title: 'Refresh now \u2014 re-read the server over SSH', 'data-tip': 'Refresh now', onclick: () => refreshNow() }, icon('refresh', 16));
+
+  const parts = [seg, h('span', { class: 'spacer' })];
+  if (canLive()) {
+    const pill = h('span', { class: 'live-pill' },
+      h('span', { class: `live-dot${state.live ? ' on' : ''}` }),
+      h('span', {}, state.live ? 'Live' : 'Paused'),
+      h('span', { class: 'live-count' }, ''));
+    const btn = h('button', { class: 'btn btn-sm', title: state.live ? 'Pause automatic refresh' : 'Resume automatic refresh', onclick: () => toggleLive() }, state.live ? 'Pause' : 'Go live');
+    parts.push(pill, btn);
+  }
+  parts.push(updated, refresh);
+  return h('div', { class: 'toolbar' }, ...parts);
 }
 
 async function refreshNow() {
   state.servers = null; state.meta = null; state.health = null;
-  await drawTab();
+  await drawTab(true);
 }
 
 function loadingBar() { return h('div', { class: 'loading-bar' }); }
@@ -101,32 +113,98 @@ async function getHealth(force) {
   return state.health;
 }
 
-// ---------- entry ----------
-
-async function drawTab() {
-  draw([loadingBar(), skeleton()]);
-  try {
-    const status = await getStatus();
-    if (!status.tokenSet) return drawTabResult([connectCard()]);
-    switch (state.tab) {
-      case 'settings': return drawTabResult(await settingsView());
-      case 'server': return drawTabResult(await detailView());
-      case 'servers': {
-        await getServers(false);
-        return drawTabResult(serversView());
-      }
-      default: {
-        await getServers(false);
-        await getHealth(false).catch(() => {});
-        return drawTabResult(overviewView(status));
-      }
-    }
-  } catch (err) {
-    return drawTabResult([banner('err', err.message || 'Could not load Server Monitoring.'), refreshRetry()]);
-  }
+async function getSettings() {
+  if (state.settings) return state.settings;
+  try { state.settings = await api('GET', `/api/${S}/settings`); } catch { state.settings = null; }
+  return state.settings;
 }
 
-function drawTabResult(content) { draw(content); }
+// ---------- live auto-refresh ----------
+// The reading keeps itself current while you watch: every refresh interval (from Settings, 30–300s)
+// we re-read the server over SSH and redraw. Nothing is invented — a failed poll just keeps the last
+// good reading until the next tick. A re-render is skipped while a field is focused so typing in the
+// server search is never interrupted, and polling stops when you leave this section or pause it.
+let pollTimer = null;
+let clockTimer = null;
+let nextAt = 0;
+
+const canLive = () => state.tab === 'overview' || state.tab === 'servers' || state.tab === 'server';
+function liveInterval() {
+  const rs = Number(state.settings && state.settings.refreshSeconds);
+  return (Number.isFinite(rs) && rs >= 30 && rs <= 300 ? rs : 60) * 1000;
+}
+function inputFocused() {
+  const a = document.activeElement;
+  return !!a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName);
+}
+function clearTimers() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (clockTimer) { clearInterval(clockTimer); clockTimer = null; }
+}
+function startLive() {
+  clearTimers();
+  nextAt = Date.now() + liveInterval();
+  pollTimer = setInterval(() => { liveTick(); }, liveInterval());
+  clockTimer = setInterval(updateClock, 1000);
+  updateClock();
+}
+function stopLive() { state.live = false; clearTimers(); nextAt = 0; }
+function renderLive() {
+  if (state.tab === 'overview') draw(overviewView(state.status));
+  else if (state.tab === 'servers') draw(serversView());
+  else if (state.tab === 'server') detailView().then(draw).catch(() => {});
+}
+async function liveTick() {
+  if (!state.live || !canLive()) return;
+  const view = $('view-servermon');
+  if (view && view.classList.contains('hidden')) { clearTimers(); return; } // navigated away
+  try {
+    if (state.tab === 'server') {
+      const content = await detailView();
+      if (state.live && state.tab === 'server' && !inputFocused()) draw(content);
+    } else {
+      await getServers(true);
+      await getHealth(true).catch(() => {});
+      if (state.live && !inputFocused() && state.tab !== 'server') renderLive();
+    }
+  } catch { /* transient SSH miss: keep the last good reading, retry next tick */ }
+  nextAt = Date.now() + liveInterval();
+}
+function updateClock() {
+  const el = document.querySelector('.live-count');
+  if (!el) return;
+  el.textContent = state.live && nextAt ? ` \u00b7 next ${Math.max(0, Math.round((nextAt - Date.now()) / 1000))}s` : '';
+}
+async function toggleLive() {
+  if (state.live) { state.live = false; clearTimers(); nextAt = 0; renderLive(); return; }
+  state.live = true;
+  await getSettings().catch(() => {});
+  startLive();
+  await liveTick();
+}
+
+// ---------- entry ----------
+
+async function drawTab(fresh = false) {
+  clearTimers(); // stop any previous schedule; re-armed below for live tabs
+  draw([loadingBar(), skeleton()]);
+  let content;
+  try {
+    const status = await getStatus();
+    if (!status.tokenSet) content = [connectCard()];
+    else if (state.tab === 'settings') content = await settingsView();
+    else if (state.tab === 'server') content = await detailView();
+    else if (state.tab === 'servers') { await getServers(fresh); content = serversView(); }
+    else { await getServers(fresh); await getHealth(fresh).catch(() => {}); content = overviewView(status); }
+  } catch (err) {
+    content = [banner('err', err.message || 'Could not load Server Monitoring.'), refreshRetry()];
+  }
+  draw(content);
+  const gotData = Boolean(state.servers && state.servers.length);
+  if (state.live && canLive() && gotData) {
+    getSettings().catch(() => {}).finally(() => { if (state.live && canLive()) startLive(); });
+  }
+}
 
 function refreshRetry() {
   return h('div', { class: 'sm-actions' }, h('button', { class: 'btn btn-sm', onclick: () => refreshNow() }, icon('refresh', 14), 'Retry'));
@@ -376,7 +454,7 @@ function serversView() {
 async function detailView() {
   const id = state.server;
   const out = [...metaBanners()];
-  await getHealth(false).catch(() => {});
+  await getHealth(true).catch(() => {});
   let server = (state.servers || []).find((s) => String(s.id) === String(id));
   let meta = { source: server ? 'cache' : null };
   try {
