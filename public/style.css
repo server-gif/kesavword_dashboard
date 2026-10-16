@@ -876,3 +876,63 @@ a.btn { text-decoration: none; }
 .chg-row .api-file { flex-shrink: 0; white-space: nowrap; }
 .attribution { margin-top: 10px; font-size: 11.5px; color: var(--text-3); }
 .attribution a { color: inherit; }
+
+/* ---- server monitoring (Cloudways) — theme-aware, built on existing tokens ---- */
+.sm-body { display: flex; flex-direction: column; gap: 16px; padding-top: 4px; }
+.pad { padding: 16px 4px; }
+
+/* loading skeletons */
+.sm-skel { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.sm-skel-row { height: 44px; border-radius: 8px; background: linear-gradient(90deg, var(--hover) 25%, var(--surface-2) 37%, var(--hover) 63%); background-size: 400% 100%; animation: sm-shimmer 1.3s ease infinite; }
+@keyframes sm-shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
+
+/* banners (stale / partial / unavailable / not-persisted) */
+.sm-banner { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: var(--radius); font-size: 13px; line-height: 1.45; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2); }
+.sm-banner .icon { flex-shrink: 0; margin-top: 1px; color: var(--text-3); }
+.sm-banner.warn { background: color-mix(in srgb, var(--warn) 12%, var(--surface)); border-color: color-mix(in srgb, var(--warn) 32%, var(--border)); color: var(--text); }
+.sm-banner.warn .icon { color: var(--warn); }
+.sm-banner.err { background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 32%, var(--border)); color: var(--text); }
+.sm-banner.err .icon { color: var(--danger); }
+.sm-banner.info { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, var(--border)); color: var(--text); }
+.sm-banner.info .icon { color: var(--accent); }
+
+.sm-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+
+/* connect / empty state */
+.sm-connect { display: flex; flex-direction: column; gap: 14px; margin-top: 8px; }
+.sm-connect-body { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.sm-connect-body > .icon { color: var(--accent); }
+.sm-connect-body p { margin: 0; font-size: 13.5px; color: var(--text-2); line-height: 1.55; max-width: 62ch; }
+.sm-cmd { margin: 0; padding: 12px 14px; width: 100%; overflow-x: auto; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border); font-family: var(--mono); font-size: 12.5px; color: var(--text); white-space: pre; }
+
+/* two-column KPI cards */
+.sm-two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+/* future-phase placeholders (never fabricated data) */
+.sm-future-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.sm-future-item { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px dashed var(--border-strong); border-radius: var(--radius); background: var(--surface-2); font-size: 13px; }
+.sm-future-item > .icon { color: var(--text-3); flex-shrink: 0; margin-top: 2px; }
+.sm-future-item.lg { flex-direction: column; align-items: flex-start; gap: 6px; }
+.sm-future-item.lg .badge { margin-top: 4px; }
+
+/* servers list */
+.sm-search { min-width: 220px; }
+.sm-row { cursor: pointer; }
+.sm-row:hover td { background: var(--hover); }
+.sort-ind { color: var(--accent); font-size: 10px; }
+
+/* server detail metadata */
+.sm-detail-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sm-detail-title { margin: 0; font-size: 18px; font-weight: 650; }
+.sm-meta { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.sm-meta-row { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 12px; padding: 10px 16px; border-top: 1px solid var(--border); }
+.sm-meta-row:first-child { border-top: 0; }
+.sm-meta-k { color: var(--text-3); font-size: 13px; }
+.sm-meta-v { color: var(--text); word-break: break-word; }
+
+@media (max-width: 900px) {
+  .sm-two { grid-template-columns: 1fr; }
+  .sm-future-grid { grid-template-columns: 1fr; }
+  .sm-search { min-width: 0; width: 100%; }
+  .sm-meta-row { grid-template-columns: 1fr; gap: 2px; }
+}

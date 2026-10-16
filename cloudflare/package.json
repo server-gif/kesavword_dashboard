@@ -9,7 +9,8 @@
     "deploy": "wrangler deploy",
     "d1:execute": "wrangler d1 execute dashboard-data --local --file",
     "export:geo": "node tools/export-geo.mjs",
-    "export:data": "node tools/export-data.mjs"
+    "export:data": "node tools/export-data.mjs",
+    "test:monitoring": "node tools/monitoring-test.mjs"
   },
   "dependencies": {
     "@noble/hashes": "^1.5.0",

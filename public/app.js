@@ -7,6 +7,7 @@ import { showActivity, resetActivity } from './js/activity.js';
 import { showTeam } from './js/team.js';
 import { showOverview, resetOverview } from './js/overview.js';
 import { showApiDetail } from './js/apidetail.js';
+import { showServerMonitoring, resetServerMonitoring } from './js/servermon.js';
 
 hydrateIcons();
 
@@ -119,6 +120,7 @@ const VIEWS = {
   files: { title: 'Files', sub: () => (session.info.url ? `Website files of ${session.info.url.replace(/^https?:\/\//, '')}` : `Everything inside ${session.info.home}`), show: (params) => showFiles(params.get('path') || session.info.home) },
   trash: { title: 'Recycle Bin', sub: () => `Deleted items are kept for ${session.info.trashDays} days, then removed forever automatically.`, show: () => showTrash(), reset: () => resetTrash() },
   activity: { title: 'Activity', sub: () => 'Every change made by you and your team, newest first.', show: () => showActivity(), reset: () => resetActivity(), admin: true },
+  servermon: { title: 'Server Monitoring', sub: () => 'Cloudways server inventory for this account (read-only).', show: (params) => showServerMonitoring(params), reset: () => resetServerMonitoring(), admin: true },
   team: { title: 'Team', sub: () => 'People who can sign in to this dashboard.', show: () => showTeam(), admin: true },
 };
 

@@ -3,3 +3,16 @@
 SFTP_PASS=your-sftp-password
 # Any random 32+ char string; signs session cookies (in production: wrangler secret put AUTH_SECRET)
 AUTH_SECRET=change-me-to-a-long-random-string
+#
+# Server Monitoring (Cloudways) — read-only server inventory.
+# Your server is a DigitalOcean Droplet managed through Cloudways, so there is no DigitalOcean
+# token to add — Cloudways owns that. Instead the app talks to the Cloudways Platform API.
+# For production, do NOT put these in a committed file. Run instead:
+#   cd cloudflare
+#   npx wrangler secret put CLOUDWAYS_EMAIL
+#   npx wrangler secret put CLOUDWAYS_API_KEY
+# Get these from the Cloudways dashboard at https://platform.cloudways.com/api (enable API access).
+# CLOUDWAYS_EMAIL is your account email (the API "key"), CLOUDWAYS_API_KEY is the master API key/secret.
+# These are FAKE placeholders — never commit real credentials.
+CLOUDWAYS_EMAIL=you@example.com
+CLOUDWAYS_API_KEY=replace_with_local_test_api_key
