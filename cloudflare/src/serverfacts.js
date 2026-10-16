@@ -303,11 +303,18 @@ export function toSample(host, at) {
 export function downSample(at) { return { t: at, up: false, cpu: null, load1: null, memPct: null, diskPct: null }; }
 
 // Read-modify-write the ring; returns the trimmed sample list. Never throws on a storage hiccup so a
-// monitoring read still succeeds even if history can't be persisted this time.
-export async function appendSample({ readCache, writeCache }, sample, { now = Date.now(), maxAge = HISTORY_WINDOW_MS, max = SAMPLE_MAX } = {}) {
+// monitoring read still succeeds even if history can't be persisted this time. Pass `samples` (the
+// already-loaded ring) to skip the extra D1 read when the caller has just read it — this keeps the
+// hot path to a single read + one write so rapid polling can't pile up D1 round-trips.
+export async function appendSample({ readCache, writeCache }, sample, { now = Date.now(), maxAge = HISTORY_WINDOW_MS, max = SAMPLE_MAX, samples } = {}) {
   if (!sample || !Number.isFinite(sample.t)) return [];
-  const snap = await Promise.resolve(readCache ? readCache(HISTORY_KEY) : null).catch(() => null);
-  const list = Array.isArray(snap?.data?.samples) ? snap.data.samples : [];
+  let list;
+  if (Array.isArray(samples)) {
+    list = samples;
+  } else {
+    const snap = await Promise.resolve(readCache ? readCache(HISTORY_KEY) : null).catch(() => null);
+    list = Array.isArray(snap?.data?.samples) ? snap.data.samples : [];
+  }
   const floor = now - maxAge;
   const merged = list
     .concat([sample])

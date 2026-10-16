@@ -130,6 +130,8 @@ async function getSettings() {
 let pollTimer = null;
 let clockTimer = null;
 let nextAt = 0;
+let pollBusy = false; // true while a poll's SSH re-read is in flight, so slow ticks never stack
+let liveFails = 0;    // consecutive poll failures, used for exponential back-off when the backend is busy
 
 const canLive = () => state.tab === 'overview' || state.tab === 'servers' || state.tab === 'server';
 function liveInterval() {
@@ -166,14 +168,24 @@ async function liveTick() {
   const view = $('view-servermon');
   if (view && view.classList.contains('hidden')) { clearTimers(); return; } // navigated away
   if (inputFocused()) { nextAt = Date.now() + liveInterval(); return; }      // don't disturb typing
+  if (pollBusy) return;                                                       // previous re-read still running — never pile up requests
+  pollBusy = true;
   try {
     await getServers(true);
     await getHealth(true).catch(() => {});
     const host = currentHost();
     if (state.live && canLive() && host) applyLive(host, state.health);
-  } catch { /* transient SSH miss: keep the last good reading, retry next tick */ }
-  nextAt = Date.now() + liveInterval();
-  syncLiveChrome();
+    liveFails = 0;
+    nextAt = Date.now() + liveInterval();
+  } catch {
+    // Transient backend pressure (e.g. the database briefly backing off): keep the last good reading
+    // and wait longer before retrying (exponential back-off, capped at 5 min) so we don't hammer it.
+    liveFails++;
+    nextAt = Date.now() + Math.min(liveInterval() * 2 ** liveFails, 300000);
+  } finally {
+    pollBusy = false;
+    syncLiveChrome();
+  }
 }
 // Update the live pill / pause button / countdown without re-rendering the body.
 function syncLiveChrome() {

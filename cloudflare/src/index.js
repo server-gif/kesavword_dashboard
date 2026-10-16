@@ -923,8 +923,10 @@ const monErrorMessage = (err) => (err instanceof sf.MonitorError ? err.message :
 
 // Rolling up/down + metric history, stored in the same D1 cache table under a dedicated key.
 const histStore = { readCache: (k) => store.readCache(k), writeCache: (k, rec) => store.writeCache(k, rec) };
-// Rapid on-demand reads must not spam the ring; the ~30-min cron (below) is the steady sampler.
-const SAMPLE_MIN_MS = 120000;
+// Rapid on-demand reads must not spam the ring; the ~30-min cron (below) is the steady sampler. We
+// only persist an on-demand sample at most once per this window (unless up/down status flips), so a
+// busy polling browser can't drive a D1 read-modify-write every few seconds and overload the database.
+const SAMPLE_MIN_MS = 300000;
 async function sampleFromResult(result) {
   if (!result) return;
   let sample = null;
@@ -934,7 +936,7 @@ async function sampleFromResult(result) {
   const list = await sf.loadSamples(histStore);
   const last = list.length ? list[list.length - 1] : null;
   if (last && Math.abs(sample.t - last.t) < SAMPLE_MIN_MS && !!sample.up === !!last.up) return;
-  await sf.appendSample(histStore, sample);
+  await sf.appendSample(histStore, sample, { samples: list });
 }
 
 app.get('/api/server-monitoring/status', async (c) => {
