@@ -877,7 +877,7 @@ a.btn { text-decoration: none; }
 .attribution { margin-top: 10px; font-size: 11.5px; color: var(--text-3); }
 .attribution a { color: inherit; }
 
-/* ---- server monitoring (Cloudways) — theme-aware, built on existing tokens ---- */
+/* ---- server monitoring (over SSH) — theme-aware, built on existing tokens ---- */
 .sm-body { display: flex; flex-direction: column; gap: 16px; padding-top: 4px; }
 .pad { padding: 16px 4px; }
 

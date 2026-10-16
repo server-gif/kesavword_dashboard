@@ -1,8 +1,8 @@
-// Server Monitoring (Cloudways) — foundation: inventory + settings, read-only.
+// Server Monitoring (over the existing SSH connection) — foundation: live server facts + settings, read-only.
 // Reuses the shared helpers (lib.js) and chart kit (charts.js). Everything renders through h()
-// (text nodes only), so server names, IPs and labels from the API are treated as untrusted.
-// Metrics, Health, Alerts and Recovery are shown only as clearly-labelled "future phase" panels —
-// no numbers, incidents or statuses are ever invented here.
+// (text nodes only), so hostnames, IPs and OS strings read from the server are treated as untrusted.
+// Metrics history, Health, Alerts and Recovery are shown only as clearly-labelled "future phase" panels —
+// no numbers, incidents or statuses are ever invented here; what you see is read live from the server.
 import { $, h, api, toast, icon, fmtDate, timeAgo, formModal } from './lib.js';
 import { tile, barList } from './charts.js';
 
@@ -67,8 +67,8 @@ function metaBanners() {
   if (!m) return out;
   if (m.unavailable) out.push(banner('err', m.error || 'Server data is unavailable right now.'));
   else {
-    if (m.stale) out.push(banner('warn', `Showing the last known inventory (from ${m.refreshedAt ? fmtDate(m.refreshedAt) : 'earlier'}) — ${m.error || 'Cloudways could not be reached just now.'}`));
-    if (m.partial) out.push(banner('warn', 'Partial inventory: there may be more servers than Cloudways returned within the safety limit.'));
+    if (m.stale) out.push(banner('warn', `Showing the last known reading (from ${m.refreshedAt ? fmtDate(m.refreshedAt) : 'earlier'}) — ${m.error || 'the server could not be reached just now.'}`));
+    if (m.partial) out.push(banner('warn', 'Partial reading: the server returned more than the safety limit allowed.'));
     if (m.source === 'live' && m.snapshotSaved === false) out.push(banner('info', 'This snapshot could not be saved for offline viewing; the data shown is live.'));
   }
   return out;
@@ -129,47 +129,53 @@ function refreshRetry() {
 
 function connectCard() {
   return h('div', { class: 'card ov-card sm-connect' },
-    h('div', { class: 'ov-card-head' }, h('div', {}, h('div', { class: 'ov-card-title' }, 'Connect Cloudways'), h('div', { class: 'ov-card-sub' }, 'Server Monitoring reads your server inventory from the Cloudways Platform API.'))),
+    h('div', { class: 'ov-card-head' }, h('div', {}, h('div', { class: 'ov-card-title' }, 'Server connection'), h('div', { class: 'ov-card-sub' }, 'Server Monitoring reads this server\u2019s live status over the same secure SSH connection the dashboard already uses.'))),
     h('div', { class: 'sm-connect-body' },
       icon('shield', 28),
-      h('p', {}, 'Your Cloudways API credentials are stored securely as server-side secrets — they are never placed in the browser, this page, or any API response. The dashboard owner runs:'),
-      h('pre', { class: 'sm-cmd' }, 'cd cloudflare\nnpx wrangler secret put CLOUDWAYS_EMAIL\nnpx wrangler secret put CLOUDWAYS_API_KEY'),
-      h('p', { class: 'muted' }, 'Get these from the Cloudways dashboard at platform.cloudways.com/api (API access). Once both secrets are set, open this page again to load your servers.'),
+      h('p', {}, 'No extra keys are needed \u2014 it reuses the server credentials that are already configured on the dashboard, which stay entirely server-side and are never placed in the browser or any API response. If this message persists, the owner should confirm the SFTP host/user/password secrets are set on the Worker.'),
       h('div', { class: 'sm-actions' }, h('button', { class: 'btn btn-sm', onclick: () => { state.status = null; drawTab(); } }, icon('refresh', 14), 'Re-check connection'))));
+}
+
+// ---------- small formatters (values are read live; an unreadable value stays a dash) ----------
+
+function dash(v) { return (v === null || v === undefined || v === '') ? '—' : String(v); }
+function round1(x) { return x == null ? '—' : Number(x).toFixed(1); }
+
+function humanUptime(sec) {
+  if (sec == null || !Number.isFinite(sec)) return null;
+  const d = Math.floor(sec / 86400), hr = Math.floor((sec % 86400) / 3600), mn = Math.floor((sec % 3600) / 60);
+  return d ? `${d}d ${hr}h` : hr ? `${hr}h ${mn}m` : `${mn}m`;
 }
 
 // ---------- overview ----------
 
 function overviewView(status) {
-  const servers = state.servers || [];
+  const host = (state.meta && state.meta.host) || (state.servers && state.servers[0]) || null;
   const out = [];
   out.push(...metaBanners());
-  if (status) {
-    out.push(h('div', { class: 'kpis' },
-      tile('Connection', status.connected ? 'Verified' : 'Not verified',
-        status.connected && status.connectionVerifiedAt ? h('div', { class: 'kpi-delta' }, `Last check ${timeAgo(status.connectionVerifiedAt)}`) : h('div', { class: 'kpi-delta' }, 'Credentials are set but no successful API call yet')),
-      tile('Servers', String(servers.length), state.meta && state.meta.partial ? h('div', { class: 'kpi-delta' }, 'partial') : null),
-      tile('Public IP', String(servers.filter((s) => s.publicIp).length), h('div', { class: 'kpi-delta' }, 'reported by Cloudways')),
-      tile('Online now', String(servers.filter((s) => String(s.status).toUpperCase() === 'RUNNING').length), h('div', { class: 'kpi-delta' }, 'Cloudways status, not app health'))));
-  }
+  if (!host) return [...out, banner('err', (state.meta && state.meta.error) || 'No server status is available yet.'), refreshRetry()];
 
-  // Region distribution from returned data only.
-  const byRegion = new Map();
-  for (const s of servers) byRegion.set(s.region || 'Unknown', (byRegion.get(s.region || 'Unknown') || 0) + 1);
-  const regionItems = [...byRegion].map(([label, count]) => [label, count]);
+  const m = host.metrics || {};
+  out.push(h('div', { class: 'kpis' },
+    tile('Connection', status && status.connected ? 'Verified' : 'Live', h('div', { class: 'kpi-delta' }, host.hostname ? `read from ${host.hostname}` : 'read over SSH')),
+    tile('Uptime', dash(humanUptime(m.uptimeSeconds)), h('div', { class: 'kpi-delta' }, 'continuous since boot')),
+    tile('Load (1 min)', m.load1 != null ? String(m.load1) : '—', m.cores != null ? h('div', { class: 'kpi-delta' }, `${m.cores} core${m.cores === 1 ? '' : 's'}`) : null),
+    tile('Memory', m.memory && m.memory.usedPct != null ? `${m.memory.usedPct}%` : '—', m.memory && m.memory.totalMb != null ? h('div', { class: 'kpi-delta' }, `${round1((m.memory.usedMb || 0) / 1024)}/${round1(m.memory.totalMb / 1024)} GB`) : null),
+    tile('Disk', m.disk && m.disk.usedPct != null ? `${m.disk.usedPct}%` : '—', m.disk && m.disk.totalGb != null ? h('div', { class: 'kpi-delta' }, `${round1(m.disk.usedGb)}/${round1(m.disk.totalGb)} GB`) : null)));
 
-  const statusCounts = new Map();
-  for (const s of servers) statusCounts.set(s.status || 'unknown', (statusCounts.get(s.status || 'unknown') || 0) + 1);
+  out.push(h('div', { class: 'card sm-meta' },
+    ...[
+      ['Operating system', dash(host.os)],
+      ['Kernel', dash(host.kernel)],
+      ['Provider', dash(host.provider)],
+      ['Public IP', dash(host.publicIp)],
+      ['Interface IP', dash(host.internalIp)],
+      ['Status', statusPill(host.status)],
+    ].map(([k, v]) => h('div', { class: 'sm-meta-row' },
+      h('div', { class: 'sm-meta-k' }, k),
+      h('div', { class: 'sm-meta-v mono' }, typeof v === 'object' ? v : h('span', {}, v))))));
 
-  out.push(h('div', { class: 'sm-two' },
-    h('div', { class: 'card ov-card' },
-      h('div', { class: 'ov-card-head' }, h('div', {}, h('div', { class: 'ov-card-title' }, 'By region'))),
-      regionItems.length ? barList(regionItems, { max: 12 }) : h('div', { class: 'muted pad' }, 'No servers returned.')),
-    h('div', { class: 'card ov-card' },
-      h('div', { class: 'ov-card-head' }, h('div', {}, h('div', { class: 'ov-card-title' }, 'Server status'))),
-      statusCounts.size ? barList([...statusCounts].map(([k, v]) => [k, v]), { max: 12 }) : h('div', { class: 'muted pad' }, 'No servers returned.'))));
-
-  out.push(futurePhaseNote('Per-server metrics, uptime, alerts and recovery actions will appear here once those phases are approved.'));
+  out.push(futurePhaseNote('Historical metric charts, uptime/incidents, alerts and recovery actions will appear here once those phases are approved. Everything shown now is read live from the server over SSH \u2014 nothing is invented.'));
   out.push(h('div', { class: 'table-foot' }, `Source: ${state.meta?.source || '—'}${state.meta?.refreshedAt ? ` · ${fmtDate(state.meta.refreshedAt)}` : ''}`));
   return out;
 }
@@ -178,10 +184,10 @@ function futurePhaseNote(text) {
   return h('div', { class: 'card ov-card sm-future' },
     h('div', { class: 'ov-card-head' }, h('div', {}, h('div', { class: 'ov-card-title' }, 'Future phases'), h('div', { class: 'ov-card-sub' }, text))),
     h('div', { class: 'sm-future-grid' },
-      ...[['Metrics & charts', 'CPU, memory, disk, network — from the Cloudways monitoring graph / server monitor API.'],
-        ['Health & uptime', 'Server status plus Cloudways monitoring and CloudwaysBot alerts.'],
-        ['Alerts & notifications', 'Threshold and health alerts via CloudwaysBot alert channels.'],
-        ['Recovery actions', 'Controlled start / stop / restart via the Cloudways server API, with confirmation, cooldown and audit.']]
+      ...[['Metrics & charts', 'Historical CPU, memory, disk and network charts, sampled from the server over SSH.'],
+        ['Health & uptime', 'Rolling uptime and incident history for the server.'],
+        ['Alerts & notifications', 'Threshold and health alerts (email and other channels).'],
+        ['Recovery actions', 'Controlled service restarts and other safe remediations, with confirmation, cooldown and audit.']]
         .map(([t, d]) => h('div', { class: 'sm-future-item' }, icon('info', 15), h('div', {}, h('div', { class: 'strong' }, t), h('div', { class: 'muted' }, d, h('span', { class: 'badge badge-gray' }, 'Available in a future phase')))))));
 }
 
@@ -208,7 +214,7 @@ function filteredServers() {
 function statusPill(s) {
   const map = { running: 'badge-green', provision: 'badge-blue', provisioning: 'badge-blue', maintenance: 'badge-blue', suspended: 'badge-amber', stopped: 'badge-gray' };
   const key = String(s || '').toLowerCase();
-  return h('span', { class: `badge ${map[key] || 'badge-amber'}`, title: 'Server status reported by Cloudways (not application health)' }, s || 'unknown');
+  return h('span', { class: `badge ${map[key] || 'badge-amber'}`, title: 'Status is whether the server answered over SSH (not application health)' }, s || 'unknown');
 }
 
 function sortHeader(label, key, cls) {
@@ -220,42 +226,39 @@ function sortHeader(label, key, cls) {
 
 function serversView() {
   const servers = state.servers || [];
-  const regions = [...new Set(servers.map((s) => s.region).filter(Boolean))].sort();
   const statuses = [...new Set(servers.map((s) => s.status || 'unknown'))].sort();
 
   const search = h('input', {
-    class: 'input sm-search', type: 'search', placeholder: 'Search name, IP or ID', value: state.q, autocomplete: 'off',
+    class: 'input sm-search', type: 'search', placeholder: 'Search hostname, IP or ID', value: state.q, autocomplete: 'off',
     oninput: (e) => { state.q = e.target.value; draw(serversView()); },
   });
-  const regionSel = h('select', { class: 'select', onchange: (e) => { state.region = e.target.value; draw(serversView()); } },
-    h('option', { value: '' }, 'All regions'), ...regions.map((r) => h('option', { value: r, selected: r === state.region }, r)));
   const statusSel = h('select', { class: 'select', onchange: (e) => { state.statusSel = e.target.value; draw(serversView()); } },
     h('option', { value: '' }, 'All statuses'), ...statuses.map((s) => h('option', { value: s, selected: s === state.statusSel }, s)));
 
   const head = h('div', { class: 'toolbar' },
-    search, regionSel, statusSel,
+    search, statusSel,
     h('span', { class: 'muted' }, `${filteredServers().length} of ${servers.length}`));
 
   const rows = filteredServers().map((s) => h('tr', {
     class: 'sm-row', onclick: () => go('server', s.id),
   },
-    h('td', {}, h('div', { class: 'strong' }, s.name || `server-${s.id}`), h('div', { class: 'muted mono' }, `#${s.id ?? '—'}`)),
-    h('td', {}, s.region || '—'),
-    h('td', {}, s.size || '—'),
+    h('td', {}, h('div', { class: 'strong' }, s.hostname || s.name || `server-${s.id}`), h('div', { class: 'muted mono' }, `#${s.id ?? '—'}`)),
+    h('td', {}, s.os || '—'),
     h('td', { class: 'mono' }, s.publicIp || h('span', { class: 'muted' }, 'none')),
+    h('td', { class: 'mono' }, s.internalIp || h('span', { class: 'muted' }, '—')),
     h('td', {}, statusPill(s.status)),
-    h('td', { class: 'cell-date' }, s.createdAt ? fmtDate(Date.parse(s.createdAt)) : '—')));
+    h('td', {}, (s.metrics && humanUptime(s.metrics.uptimeSeconds)) || '—')));
 
   const table = servers.length
     ? h('table', { class: 'table' },
       h('thead', {}, h('tr', {},
-        sortHeader('Server', 'name'), sortHeader('Region', 'region'), sortHeader('Size', 'size'),
-        sortHeader('Public IP', 'publicIp'), sortHeader('Status', 'status'), sortHeader('Created', 'createdAt'))),
+        sortHeader('Server', 'name'), h('th', {}, 'Operating system'),
+        sortHeader('Public IP', 'publicIp'), h('th', {}, 'Interface IP'), sortHeader('Status', 'status'), h('th', {}, 'Uptime'))),
       h('tbody', {}, ...rows))
-    : h('div', { class: 'empty-state' }, h('div', { class: 'empty-text' }, state.meta && state.meta.unavailable ? 'Server data unavailable.' : 'No servers found on this account.'));
+    : h('div', { class: 'empty-state' }, h('div', { class: 'empty-text' }, state.meta && state.meta.unavailable ? 'Server data unavailable.' : 'No server status yet.'));
 
   return [...metaBanners(), head, h('div', { class: 'card table-card' }, table),
-    h('div', { class: 'table-foot muted' }, 'The status column is what Cloudways reports for the server, which is not the same as your application being healthy.')];
+    h('div', { class: 'table-foot muted' }, 'Status shows whether the server answered over SSH; it is not the same as your application being healthy.')];
 }
 
 // ---------- server detail ----------
@@ -271,7 +274,7 @@ async function detailView() {
     meta = data;
   } catch (err) {
     if (!server) return [banner('err', err.message || 'Could not load this server.'), backLink(), refreshRetry()];
-    out.push(banner('warn', `Showing a cached copy — ${err.message || 'Cloudways could not be reached.'}`));
+    out.push(banner('warn', `Showing a cached copy — ${err.message || 'the server could not be reached.'}`));
   }
   if (!server) return [...out, banner('err', 'That server could not be found.'), backLink()];
 
@@ -282,19 +285,20 @@ async function detailView() {
     h('h2', { class: 'sm-detail-title' }, server.name || `Server #${server.id}`),
     statusPill(server.status), refreshed));
 
+  const m = server.metrics || {};
   const spec = [
-    ['Server ID', String(server.id ?? '—')],
-    ['Region', server.region || '—'],
+    ['Hostname', server.hostname || '—'],
     ['Provider', server.provider || '—'],
-    ['Size / plan', server.size || '—'],
+    ['Operating system', server.os || '—'],
+    ['Kernel', server.kernel || '—'],
     ['Status', server.status || '—'],
-    ['OS', server.os || '—'],
-    ['vCPUs', server.vcpus ?? '—'],
-    ['Memory', server.memoryGb != null ? `${server.memoryGb} GB` : '—'],
-    ['Disk', server.diskGb != null ? `${server.diskGb} GB` : '—'],
     ['Public IP', server.publicIp || '—'],
-    ['Created', server.createdAt ? fmtDate(Date.parse(server.createdAt)) : '—'],
-    ['Labels', server.labels && server.labels.length ? server.labels.join(', ') : '—'],
+    ['Interface IP', server.internalIp || '—'],
+    ['CPU cores', m.cores != null ? String(m.cores) : '—'],
+    ['Load (1/5/15 min)', m.load1 != null ? `${m.load1} / ${m.load5} / ${m.load15}` : '—'],
+    ['Uptime', humanUptime(m.uptimeSeconds) || '—'],
+    ['Memory', (m.memory && m.memory.totalMb != null) ? `${round1((m.memory.usedMb || 0) / 1024)} / ${round1(m.memory.totalMb / 1024)} GB${m.memory.usedPct != null ? ` (${m.memory.usedPct}% used)` : ''}` : (server.memoryGb != null ? `${server.memoryGb} GB` : '—')],
+    [`Disk${m.disk && m.disk.mount ? ` (${m.disk.mount})` : ''}`, (m.disk && m.disk.totalGb != null) ? `${round1(m.disk.usedGb)} / ${round1(m.disk.totalGb)} GB${m.disk.usedPct != null ? ` (${m.disk.usedPct}% used)` : ''}` : (server.diskGb != null ? `${server.diskGb} GB` : '—')],
   ];
   out.push(h('div', { class: 'card sm-meta' }, ...spec.map(([k, v]) =>
     h('div', { class: 'sm-meta-row' }, h('div', { class: 'sm-meta-k' }, k), h('div', { class: 'sm-meta-v mono' }, String(v))))));
@@ -323,14 +327,13 @@ async function settingsView() {
   const rangeLabel = { '1h': '1 hour', '6h': '6 hours', '24h': '24 hours', '7d': '7 days' }[s.defaultRange] || s.defaultRange;
 
   const rows = [
-    ['Refresh interval', `${s.refreshSeconds} seconds`, 'How often the inventory is considered fresh before Cloudways is queried again.'],
-    ['Default chart range', rangeLabel, 'Time range used by the metrics charts in a future phase.'],
-    ['Default region filter', s.regionFilter || '(all)', 'Pre-selected region filter for the Servers list.'],
+    ['Refresh interval', `${s.refreshSeconds} seconds`, 'How often the reading is considered fresh before the server is queried again over SSH.'],
+    ['Default chart range', rangeLabel, 'Time range used by the historical metric charts in a future phase.'],
     ['Email alerts', s.notify?.email ? 'On' : 'Off', 'Preference only — alert delivery is not enabled in this phase.'],
   ];
   return [
     h('div', { class: 'card ov-card' },
-      h('div', { class: 'ov-card-head' }, h('div', {}, h('div', { class: 'ov-card-title' }, 'Monitoring settings'), h('div', { class: 'ov-card-sub' }, 'Saved on the server and recorded in the activity log. Your Cloudways credentials are never stored here.'))),
+      h('div', { class: 'ov-card-head' }, h('div', {}, h('div', { class: 'ov-card-title' }, 'Monitoring settings'), h('div', { class: 'ov-card-sub' }, 'Saved on the server and recorded in the activity log. The server connection credentials are never stored here.'))),
       h('table', { class: 'table' },
         h('tbody', {}, ...rows.map(([k, v, hint]) => h('tr', {},
           h('td', {}, h('div', { class: 'strong' }, k), h('div', { class: 'muted' }, hint)),

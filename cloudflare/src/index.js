@@ -11,7 +11,7 @@ import * as store from './store.js';
 import { withSftp, isBinary } from './sftp.js';
 import { lintPhp, isPhpPath } from './lint.js';
 import { buildOverview, buildApiDetail, findLogs, findErrorLog, PERIODS } from './overview.js';
-import * as cw from './cloudways.js';
+import * as sf from './serverfacts.js';
 
 const DAY = 86400000;
 const TRASH_DAYS = 15;
@@ -901,57 +901,60 @@ app.post('/api/test-request', async (c) => {
   });
 });
 
-// ---- server monitoring (Cloudways, owner only, read-only inventory) ----
+// ---- server monitoring (read-only server facts over the existing SSH connection) ----
 
-// Reuses the existing D1 cache conventions (store.readCache/writeCache) for a durable last-good
-// snapshot; the in-isolate Map is only the fast TTL layer. Concurrent (even ?fresh=1) requests share
-// a single upstream call via the controller's in-flight de-dupe.
-const serversCache = cw.createServersCache({
+// Reads real, current system facts from the production server over the SAME vetted SSH bridge the rest
+// of the dashboard already uses. Reuses the existing D1 cache conventions (store.readCache/writeCache)
+// for a durable last-good snapshot; the in-isolate Map is only the fast TTL layer. Concurrent (even
+// ?fresh=1) requests share a single SSH round-trip via the controller's in-flight de-dupe, because SSH
+// handshakes are expensive on Workers.
+const hostCache = sf.createHostCache({
   readCache: (k) => store.readCache(k),
   writeCache: (k, rec) => store.writeCache(k, rec),
 });
 
-// Single-account, rotation-stable cache key (the API credentials never appear in it).
-const serversCacheKey = 'sm:servers|cloudways';
-const noCredsResponse = () => ({
-  servers: [], refreshedAt: null, source: 'error', stale: false, partial: false, unavailable: true,
-  error: 'Cloudways is not connected yet. The owner needs to set the CLOUDWAYS_EMAIL and CLOUDWAYS_API_KEY secrets.',
+// Stable, rotation-proof cache key (no credentials ever appear in it).
+const hostCacheKey = 'sm:host|ssh';
+const noConnResponse = () => ({
+  servers: [], host: null, refreshedAt: null, source: 'error', stale: false, partial: false, unavailable: true,
+  error: 'The server connection is not configured, so its status cannot be read.',
 });
-const cwErrorMessage = (err) => (err instanceof cw.CwError ? err.message : 'Could not reach Cloudways just now.');
+const monErrorMessage = (err) => (err instanceof sf.MonitorError ? err.message : 'Could not read the server status just now.');
 
 app.get('/api/server-monitoring/status', async (c) => {
   const d = adminOnly(c); if (d) return d;
-  return c.json({ ...cw.statusBlock(cfg()), site: (c.env.SITE_NAME || 'Server Dashboard').trim() });
+  return c.json({ ...sf.statusBlock(cfg()), site: (c.env.SITE_NAME || 'Server Dashboard').trim() });
 });
 
 app.get('/api/server-monitoring/servers', async (c) => {
   const d = adminOnly(c); if (d) return d;
   const env = cfg();
-  if (!cw.hasCreds(env)) return c.json(noCredsResponse());
-  return c.json(await serversCache.load(serversCacheKey, env, { fresh: c.req.query('fresh') === '1' }));
+  if (!sf.hasCreds(env)) return c.json(noConnResponse());
+  return c.json(await hostCache.load(hostCacheKey, env, { fresh: c.req.query('fresh') === '1' }));
 });
 
 app.get('/api/server-monitoring/servers/:id', async (c) => {
   const d = adminOnly(c); if (d) return d;
   const env = cfg();
-  if (!cw.hasCreds(env)) return c.json({ error: noCredsResponse().error, unavailable: true }, 503);
+  if (!sf.hasCreds(env)) return c.json({ error: noConnResponse().error, unavailable: true }, 503);
   let id;
-  try { id = cw.parseId(c.req.param('id')); } catch (err) { return c.json({ error: err.message }, err.status || 400); }
+  try { id = sf.parseId(c.req.param('id')); } catch (err) { return c.json({ error: err.message }, err.status || 400); }
+  if (id !== sf.HOST_ID) return c.json({ error: 'Unknown server id.' }, 404);
   try {
-    const { server, fetchedAt } = await cw.getServer(env, id);
+    const { server, fetchedAt } = await sf.getHost(env);
     return c.json({ server, refreshedAt: fetchedAt, source: 'live', stale: false });
   } catch (err) {
-    // Serve a labelled cached inventory record when one exists; never pass it off as current.
-    const snap = await store.readCache(serversCacheKey).catch(() => null);
-    const rec = snap?.data?.servers?.find((s) => s.id === id);
-    if (rec) return c.json({ server: rec, refreshedAt: snap.at, source: 'stale', stale: true, error: cwErrorMessage(err) });
-    return c.json({ error: cwErrorMessage(err) }, err.status || 502);
+    // Serve a labelled cached snapshot when one exists; never pass it off as current.
+    const snap = await store.readCache(hostCacheKey).catch(() => null);
+    const rec = snap?.data?.host;
+    if (rec) return c.json({ server: rec, refreshedAt: snap.at, source: 'stale', stale: true, error: monErrorMessage(err) });
+    return c.json({ error: monErrorMessage(err) }, err.status || 502);
   }
 });
 
 app.get('/api/server-monitoring/settings', async (c) => {
   const d = adminOnly(c); if (d) return d;
-  return c.json(await store.getSetting('monitoring', cw.DEFAULT_SETTINGS));
+  return c.json(await store.getSetting('monitoring', sf.DEFAULT_SETTINGS));
 });
 
 app.put('/api/server-monitoring/settings', async (c) => {
@@ -959,10 +962,10 @@ app.put('/api/server-monitoring/settings', async (c) => {
   let body;
   try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid request body' }, 400); }
   let next;
-  try { next = cw.validateSettings(body); } catch (err) { return c.json({ error: err.message }, err.status || 400); }
-  const prev = await store.getSetting('monitoring', cw.DEFAULT_SETTINGS);
+  try { next = sf.validateSettings(body); } catch (err) { return c.json({ error: err.message }, err.status || 400); }
+  const prev = await store.getSetting('monitoring', sf.DEFAULT_SETTINGS);
   await store.setSetting('monitoring', next);
-  await store.logActivity(user(c), 'monitoring_settings', { detail: cw.describeSettingsChange(prev, next) });
+  await store.logActivity(user(c), 'monitoring_settings', { detail: sf.describeSettingsChange(prev, next) });
   return c.json(next);
 });
 
