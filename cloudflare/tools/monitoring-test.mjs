@@ -40,7 +40,7 @@ const PROBE_STDOUT = [
   '@@HOSTNAME@@ cloud-master-1',
   '@@KERNEL@@ Linux 5.15.0-91-generic',
   '@@OS@@ "Ubuntu 22.04.3 LTS"',
-  '@@IP@@ 10.66.0.5 172.17.0.1',
+  '@@IP@@ 159.89.161.137 10.66.0.5 172.17.0.1',
   '@@UPTIME@@ 123456',
   '@@LOAD@@ 0.42 0.31 0.20 1/123 4567',
   '@@CORES@@ 2',
@@ -118,7 +118,7 @@ await test('normalizeHost: full probe -> real metrics, GB/MB, ips, provider', ()
   assert.equal(h.os, 'Ubuntu 22.04.3 LTS'); // quotes stripped
   assert.equal(h.kernel, 'Linux 5.15.0-91-generic');
   assert.equal(h.publicIp, '159.89.161.137'); // the address the dashboard already dials
-  assert.equal(h.internalIp, '10.66.0.5'); // first interface ip
+  assert.equal(h.internalIp, '10.66.0.5'); // private interface ip, picked even though public is listed first
   assert.equal(h.vcpus, 2);
   assert.equal(h.memoryGb, 3.91); // 4000 MB / 1024
   assert.equal(h.diskGb, 30);

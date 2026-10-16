@@ -24,7 +24,7 @@ export async function showServerMonitoring(params) {
   if (['overview', 'servers', 'settings'].includes(tab)) state.tab = tab;
   const server = params.get('server');
   if (server) { state.server = server; state.tab = 'server'; }
-  await draw();
+  await drawTab();
 }
 
 function go(tab, server) {
@@ -48,7 +48,7 @@ function toolbar() {
 
 async function refreshNow() {
   state.servers = null; state.meta = null;
-  await draw();
+  await drawTab();
 }
 
 function loadingBar() { return h('div', { class: 'loading-bar' }); }

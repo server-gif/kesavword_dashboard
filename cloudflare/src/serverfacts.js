@@ -121,11 +121,13 @@ export function normalizeHost(rec, env) {
   const uptimeSeconds = num(rec.UPTIME);
 
   // Public IP: the address the whole dashboard already dials is env.SFTP_HOST; report that as the
-  // server's public IP (accurate and what the owner expects). The interface IP from `hostname -I` is
-  // exposed separately as internalIp (what the OS itself sees), never conflated.
+  // server's public IP (accurate and what the owner expects). `hostname -I` often lists the public
+  // address FIRST on a droplet, so for the interface/internal address we deliberately pick a
+  // private-range address (RFC1918) — never just the first token — so the two fields stay distinct.
   const publicIp = str(env && env.SFTP_HOST);
-  const ipTok = String(rec.IP || '').trim().split(/\s+/)[0];
-  const internalIp = ipTok && IPV4.test(ipTok) ? ipTok : null;
+  const ipToks = String(rec.IP || '').trim().split(/\s+/).filter((t) => IPV4.test(t));
+  const PRIVATE_IP = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;
+  const internalIp = ipToks.find((t) => PRIVATE_IP.test(t)) || null;
 
   const hostname = str(rec.HOSTNAME);
   const cores = num(rec.CORES);
