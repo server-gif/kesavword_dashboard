@@ -52,7 +52,7 @@ function toolbar() {
       h('span', { 'data-live': 'live-state' }, state.live ? 'Live' : 'Paused'),
       h('span', { class: 'live-count', 'data-live': 'next' }, ''));
     const btn = h('button', { class: 'btn btn-sm', 'data-live': 'live-btn', title: state.live ? 'Pause automatic refresh' : 'Resume automatic refresh', onclick: () => toggleLive() }, state.live ? 'Pause' : 'Go live');
-    parts.push(pill, btn);
+    parts.push(pill, intervalSelect(), btn);
   }
   parts.push(updated, refresh);
   return h('div', { class: 'toolbar' }, ...parts);
@@ -61,6 +61,37 @@ function toolbar() {
 async function refreshNow() {
   state.servers = null; state.meta = null; state.health = null;
   await drawTab(true);
+}
+
+// The live re-read interval, changeable right from the toolbar (same setting as in Settings — the
+// choice is saved to the server, so it also applies to the next visit and the Settings page).
+const INTERVAL_CHOICES = [[30, 'every 30s'], [60, 'every 1 min'], [120, 'every 2 min'], [180, 'every 3 min'], [300, 'every 5 min']];
+function intervalSelect() {
+  const cur = Number(state.settings && state.settings.refreshSeconds) || 60;
+  const choices = INTERVAL_CHOICES.map(([v, l]) => [v, l]);
+  if (!choices.some(([v]) => v === cur)) { choices.push([cur, `every ${cur}s`]); choices.sort((a, b) => a[0] - b[0]); }
+  return h('select', {
+    class: 'select live-interval',
+    title: 'How often the reading is re-checked live over SSH (saved in Monitoring settings)',
+    onchange: (e) => setRefreshSeconds(Number(e.target.value)),
+  }, ...choices.map(([v, l]) => h('option', { value: String(v), selected: v === cur }, l)));
+}
+async function setRefreshSeconds(n) {
+  const s = state.settings || {};
+  try {
+    const saved = await api('PUT', `/api/${S}/settings`, {
+      refreshSeconds: n,
+      defaultRange: s.defaultRange || '7d',
+      regionFilter: s.regionFilter || '',
+      notify: { email: Boolean(s.notify && s.notify.email) },
+    });
+    state.settings = saved;
+    toast(`Live refresh set to every ${saved.refreshSeconds >= 60 ? `${saved.refreshSeconds / 60} min` : `${saved.refreshSeconds}s`}`);
+    if (state.live && canLive()) startLive(); // re-arm the schedule at the new interval right away
+    else syncLiveChrome();
+  } catch (err) {
+    toast(err.message || 'Could not save the refresh interval', 'err');
+  }
 }
 
 function loadingBar() { return h('div', { class: 'loading-bar' }); }
@@ -220,18 +251,19 @@ async function drawTab(fresh = false) {
   try {
     const status = await getStatus();
     if (!status.tokenSet) content = [connectCard()];
-    else if (state.tab === 'settings') content = await settingsView();
-    else if (state.tab === 'server') content = await detailView();
-    else if (state.tab === 'servers') { await getServers(fresh); content = serversView(); }
-    else { await getServers(fresh); await getHealth(fresh).catch(() => {}); content = overviewView(status); }
+    else {
+      if (canLive()) await getSettings().catch(() => {}); // toolbar interval dropdown shows the saved value
+      if (state.tab === 'settings') content = await settingsView();
+      else if (state.tab === 'server') content = await detailView();
+      else if (state.tab === 'servers') { await getServers(fresh); content = serversView(); }
+      else { await getServers(fresh); await getHealth(fresh).catch(() => {}); content = overviewView(status); }
+    }
   } catch (err) {
     content = [banner('err', err.message || 'Could not load Server Monitoring.'), refreshRetry()];
   }
   draw(content);
   const gotData = Boolean(state.servers && state.servers.length);
-  if (state.live && canLive() && gotData) {
-    getSettings().catch(() => {}).finally(() => { if (state.live && canLive()) startLive(); });
-  }
+  if (state.live && canLive() && gotData) startLive();
 }
 
 function refreshRetry() {
