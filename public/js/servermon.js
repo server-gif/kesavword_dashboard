@@ -97,6 +97,16 @@ function closeIntervalMenu() {
 }
 function onIntervalOutside(e) { if (openInterval && !openInterval.wrap.contains(e.target)) closeIntervalMenu(); }
 function onIntervalKey(e) { if (e.key === 'Escape') closeIntervalMenu(); }
+// The tick lives on every row and CSS shows it only on the selected one, so changing the choice is a
+// class move. The menu is built once when the toolbar renders and the live ticks update values in
+// place, so baking the mark in at build time used to leave it stuck on the old value.
+function markIntervalChoice(v) {
+  document.querySelectorAll('.sm-menu-item[data-v]').forEach((el) => {
+    const on = Number(el.dataset.v) === Number(v);
+    el.classList.toggle('sel', on);
+    el.setAttribute('aria-selected', String(on));
+  });
+}
 function intervalSelect() {
   const cur = Number(state.settings && state.settings.refreshSeconds) || 60;
   const choices = INTERVAL_CHOICES.map(([v, l]) => [v, l]);
@@ -104,9 +114,9 @@ function intervalSelect() {
   const labelFor = (v) => (choices.find(([cv]) => cv === v) || choices[0])[1];
   const menu = h('div', { class: 'sm-menu', role: 'listbox', hidden: true },
     ...choices.map(([v, l]) => h('button', {
-      class: `sm-menu-item${v === cur ? ' sel' : ''}`, type: 'button', role: 'option', 'aria-selected': v === cur,
+      class: `sm-menu-item${v === cur ? ' sel' : ''}`, type: 'button', role: 'option', 'aria-selected': v === cur, 'data-v': String(v),
       onclick: () => { closeIntervalMenu(); setRefreshSeconds(v, labelFor(v)); },
-    }, l, v === cur ? icon('check', 13) : null)));
+    }, l, icon('check', 13))));
   const btn = h('button', {
     class: 'live-interval', type: 'button',
     'data-tip': 'How often the reading is re-checked live over SSH \u2014 saved in Monitoring settings',
@@ -134,6 +144,7 @@ async function setRefreshSeconds(n, label) {
     });
     state.settings = saved;
     if (label) setLive('interval-label', label); // reflect the new choice on the trigger right away
+    markIntervalChoice(saved.refreshSeconds);    // ...and move the tick in the menu to match it
     toast(`Live refresh set to every ${saved.refreshSeconds >= 60 ? `${saved.refreshSeconds / 60} min` : `${saved.refreshSeconds}s`}`);
     if (state.live && canLive()) startLive(); // re-arm the schedule at the new interval right away
     else syncLiveChrome();
