@@ -296,7 +296,7 @@ async function formatCode() {
   if (!original.trim()) return;
 
   const btn = $('editorFormat');
-  const label = btn.querySelector('span');
+  const label = btn.querySelector('span:not(.icon)'); // the first span is the icon hydrateIcons prepends
   formatting = true;
   btn.disabled = true;
   label.textContent = 'Formatting…';
@@ -316,8 +316,9 @@ async function formatCode() {
     if (editor) {
       // executeEdits (not setValue) so one Ctrl+Z undoes the whole reformat.
       editor.executeEdits('format', [{ range: editor.getModel().getFullModelRange(), text: out.formatted, forceMoveMarkers: true }]);
-      editor.setPosition(editor.getModel().getPositionAt(caret));
-      editor.revealPositionIfOutsideViewport(editor.getModel().getPositionAt(caret));
+      const caretPos = editor.getModel().getPositionAt(caret);
+      editor.setPosition(caretPos);
+      editor.revealLineInCenterIfOutsideViewport(caretPos.lineNumber);
       editor.focus();
     } else {
       const top = fallback.scrollTop;
