@@ -59,8 +59,26 @@ function toolbar() {
 }
 
 async function refreshNow() {
-  state.servers = null; state.meta = null; state.health = null;
-  await drawTab(true);
+  // First load (or after an error): the normal skeleton path.
+  if (!(state.servers && state.servers.length)) {
+    state.servers = null; state.meta = null; state.health = null;
+    await drawTab(true);
+    return;
+  }
+  // Otherwise keep the numbers on screen and re-read in the background (stale-while-revalidate):
+  // only the “Updated” label shows progress, and applyLive swaps the values in place when they arrive.
+  setLive('updated', 'Re-reading…');
+  try {
+    await getServers(true);
+    await getHealth(true).catch(() => {});
+    const host = currentHost();
+    if (host) applyLive(host, state.health);
+    liveFails = 0;
+    if (state.live && canLive()) { nextAt = Date.now() + liveInterval(); syncLiveChrome(); } // this read counts as this interval's poll
+  } catch (err) {
+    toast(err.message || 'Could not re-read the server just now — showing the last good reading.', 'err');
+    setLive('updated', state.meta && state.meta.refreshedAt ? `Updated ${timeAgo(state.meta.refreshedAt)}` : '');
+  }
 }
 
 // The live re-read interval, changeable right from the toolbar (same setting as in Settings — the
@@ -391,12 +409,13 @@ function overviewView(status) {
 
   const m = host.metrics || {};
   out.push(h('div', { class: 'kpis' },
-    kpiTile('conn', 'Connection', status && status.connected ? 'Verified' : 'Live', h('div', { class: 'kpi-delta' }, host.hostname ? `read from ${host.hostname}` : 'read over SSH')),
-    kpiTile('uptime', 'Uptime', dash(humanUptime(m.uptimeSeconds)), h('div', { class: 'kpi-delta' }, 'continuous since boot')),
-    kpiTile('load1', 'Load (1 min)', m.load1 != null ? String(m.load1) : '—', m.cores != null ? h('div', { class: 'kpi-delta' }, `${m.cores} core${m.cores === 1 ? '' : 's'}`) : null),
-    kpiTile('cpu', 'CPU', m.cpuPct != null ? `${m.cpuPct}%` : '—', m.cores != null ? h('div', { class: 'kpi-delta' }, `busy of ${m.cores} core${m.cores === 1 ? '' : 's'}`) : null),
-    kpiTile('mem', 'Memory', m.memory && m.memory.usedPct != null ? `${m.memory.usedPct}%` : '—', m.memory && m.memory.totalMb != null ? kpiDelta('memsub', `${round1((m.memory.usedMb || 0) / 1024)}/${round1(m.memory.totalMb / 1024)} GB`) : null),
-    kpiTile('disk', 'Disk', m.disk && m.disk.usedPct != null ? `${m.disk.usedPct}%` : '—', m.disk && m.disk.totalGb != null ? kpiDelta('disksub', `${round1(m.disk.usedGb)}/${round1(m.disk.totalGb)} GB`) : null)));
+    kpiTile('conn', 'Connection', status && status.connected ? 'Verified' : 'Live', h('div', { class: 'kpi-delta' }, host.hostname ? `read from ${host.hostname}` : 'read over SSH'), 'Whether the dashboard could reach your server over the secure SSH connection it already uses'),
+    kpiTile('uptime', 'Uptime', dash(humanUptime(m.uptimeSeconds)), h('div', { class: 'kpi-delta' }, 'continuous since boot'), 'How long the server has been running since it last restarted'),
+    kpiTile('load1', 'Load (1 min)', m.load1 != null ? String(m.load1) : '—', m.cores != null ? h('div', { class: 'kpi-delta' }, `${m.cores} core${m.cores === 1 ? '' : 's'}`) : null, 'Tasks waiting for the CPU in the last minute — close to the core count means fully busy'),
+    kpiTile('cpu', 'CPU', m.cpuPct != null ? `${m.cpuPct}%` : '—', m.cores != null ? h('div', { class: 'kpi-delta' }, `busy of ${m.cores} core${m.cores === 1 ? '' : 's'}`) : null, 'How busy the processor was during the last 1-second sample'),
+    kpiTile('mem', 'Memory', m.memory && m.memory.usedPct != null ? `${m.memory.usedPct}%` : '—', m.memory && m.memory.totalMb != null ? kpiDelta('memsub', `${round1((m.memory.usedMb || 0) / 1024)}/${round1(m.memory.totalMb / 1024)} GB`) : null, 'RAM currently in use out of the total installed'),
+    kpiTile('disk', 'Disk', m.disk && m.disk.usedPct != null ? `${m.disk.usedPct}%` : '—', m.disk && m.disk.totalGb != null ? kpiDelta('disksub', `${round1(m.disk.usedGb)}/${round1(m.disk.totalGb)} GB`) : null, 'Storage used on the main drive out of its total capacity')));
+  out.push(legendStrip());
 
   out.push(h('div', { class: 'card sm-meta' },
     ...[
@@ -418,6 +437,17 @@ function overviewView(status) {
   out.push(futurePhaseNote('Everything above is read live from the server over SSH, and the usage trend and up/down history build from real checks — nothing is invented. Proactive alerting (email/other channels) and guided recovery actions arrive in later phases.'));
   out.push(h('div', { class: 'table-foot', 'data-live': 'source' }, `Source: ${state.meta?.source || '—'}${state.meta?.refreshedAt ? ` · ${fmtDate(state.meta.refreshedAt)}` : ''}`));
   return out;
+}
+
+// A one-line plain-language key right under the KPI tiles: what each number means and where it comes
+// from, so the page never reads as unexplained numbers.
+function legendStrip() {
+  const parts = [['CPU', 'processor busy right now'], ['Memory', 'RAM used of total'], ['Disk', 'storage used'], ['Load', 'tasks waiting for the CPU'], ['Uptime', 'time since last restart']];
+  return h('div', { class: 'sm-legend' },
+    icon('info', 14),
+    h('span', { class: 'sm-legend-lead' }, 'What you\u2019re seeing:'),
+    ...parts.map(([k, v]) => h('span', { class: 'sm-legend-part' }, h('b', {}, k), h('span', { class: 'muted' }, ` ${v}`))),
+    h('span', { class: 'muted' }, '— every value is read live from your server over the existing secure SSH connection, nothing is estimated.'));
 }
 
 function futurePhaseNote(text) {
