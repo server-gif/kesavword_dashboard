@@ -238,6 +238,105 @@ async function confirmErrors(errors) {
   return false;
 }
 
+// ---------- format (Prettier) ----------
+
+// Prettier runs in the browser, like Monaco. It only rewrites the text on screen — the file on
+// the server changes when Save is pressed. Each type lists the parser files it needs.
+const PRETTIER_CDN = 'https://cdn.jsdelivr.net/npm/prettier@3.3.3';
+const PHP_PLUGIN_CDN = 'https://cdn.jsdelivr.net/npm/@prettier/plugin-php@0.22.3/standalone.js';
+const FORMAT_FILES = {
+  js: ['babel', 'estree'], mjs: ['babel', 'estree'], cjs: ['babel', 'estree'], jsx: ['babel', 'estree'],
+  ts: ['typescript', 'estree'], tsx: ['typescript', 'estree'], json: ['babel', 'estree'],
+  css: ['postcss'], scss: ['postcss'], less: ['postcss'],
+  html: ['html'], htm: ['html'], vue: ['html'],
+  md: ['markdown'], yml: ['yaml'], yaml: ['yaml'],
+  php: ['php'], phtml: ['php'],
+};
+const parserCdn = (name) => (name === 'php' ? PHP_PLUGIN_CDN : `${PRETTIER_CDN}/plugins/${name}.js`);
+const formatFilesFor = (path) => FORMAT_FILES[extOf(baseName(path))] || null;
+
+const scripts = new Map(); // cdn -> load promise
+let scriptQueue = Promise.resolve();
+
+// These are UMD files that only publish their window global when no AMD loader is present, and
+// Monaco's loader is one — so `define` is stepped around, one script at a time.
+function loadScript(cdn) {
+  if (!scripts.has(cdn)) {
+    const task = scriptQueue.then(() => {
+      const define = window.define;
+      window.define = undefined;
+      return new Promise((resolve, reject) => {
+        const el = document.createElement('script');
+        el.src = cdn;
+        el.onload = resolve;
+        el.onerror = () => reject(new Error('the formatter could not be downloaded'));
+        document.head.append(el);
+      }).finally(() => { window.define = define; });
+    });
+    task.catch(() => scripts.delete(cdn)); // let a later click try again
+    scripts.set(cdn, task);
+  }
+  return scripts.get(cdn);
+}
+
+async function loadPrettier(files) {
+  await loadScript(`${PRETTIER_CDN}/standalone.js`);
+  for (const name of files) await loadScript(parserCdn(name));
+  if (!window.prettier) throw new Error('the formatter did not start');
+  return window.prettier;
+}
+
+let formatting = false;
+
+async function formatCode() {
+  if (!editing || formatting) return;
+  const files = formatFilesFor(editing.path);
+  if (!files) return toast(`Prettier can't format ${baseName(editing.path)}`, 'err');
+  const original = editor ? editor.getValue() : fallback.value;
+  if (!original.trim()) return;
+
+  const btn = $('editorFormat');
+  const label = btn.querySelector('span');
+  formatting = true;
+  btn.disabled = true;
+  label.textContent = 'Formatting…';
+  try {
+    const prettier = await loadPrettier(files);
+    const from = editor ? editor.getModel().getOffsetAt(editor.getPosition()) : fallback.selectionStart;
+    // Prettier keeps the cursor with it, so the caret stays on the same code after the reshuffle.
+    const out = await prettier.formatWithCursor(original, {
+      filepath: editing.path,
+      plugins: window.prettierPlugins,
+      cursorOffset: from,
+      printWidth: 120,
+      endOfLine: original.includes('\r') ? 'crlf' : 'lf', // don't rewrite the whole file's line endings
+    });
+    if (out.formatted === original) return toast('Already formatted');
+    const caret = Math.min(out.cursorOffset, out.formatted.length);
+    if (editor) {
+      // executeEdits (not setValue) so one Ctrl+Z undoes the whole reformat.
+      editor.executeEdits('format', [{ range: editor.getModel().getFullModelRange(), text: out.formatted, forceMoveMarkers: true }]);
+      editor.setPosition(editor.getModel().getPositionAt(caret));
+      editor.revealPositionIfOutsideViewport(editor.getModel().getPositionAt(caret));
+      editor.focus();
+    } else {
+      const top = fallback.scrollTop;
+      fallback.value = out.formatted;
+      fallback.scrollTop = top;
+      fallback.setSelectionRange(caret, caret);
+      fallback.focus();
+      refreshDirty();
+    }
+    toast('Formatted with Prettier');
+  } catch (err) {
+    toast(`Couldn't format: ${String(err?.message || err).split('\n')[0]}`, 'err');
+  } finally {
+    formatting = false;
+    btn.disabled = false;
+    label.textContent = 'Format';
+  }
+}
+
 // Open a file and put the cursor on a line (used by the overview's error list).
 export async function openEditorAt(path, line, onClosed) {
   await openEditor(path, onClosed);
@@ -261,6 +360,7 @@ export async function openEditor(path, onClosed) {
   const lang = languageFor(path);
   $('editorLang').textContent = lang === 'plaintext' ? 'Plain text' : lang;
   $('editorCopyUrl').classList.toggle('hidden', !publicUrl(path));
+  $('editorFormat').classList.toggle('hidden', !formatFilesFor(path));
   openModal(modal, () => { if (!editor?.hasTextFocus()) closeEditor(); });
 
   const monaco = await loadMonaco();
@@ -282,6 +382,7 @@ export async function openEditor(path, onClosed) {
       errorLines = editor.createDecorationsCollection();
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => saveEditor());
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => { if (testerOpen()) sendTest(); });
+      editor.addCommand(monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF, () => formatCode());
       editor.onDidChangeModelContent(onContentChanged);
       monaco.editor.onDidChangeMarkers((uris) => {
         const uri = editor?.getModel()?.uri.toString();
@@ -304,6 +405,7 @@ export async function openEditor(path, onClosed) {
       fallback = h('textarea', { class: 'fallback-editor', spellcheck: false, oninput: refreshDirty });
       fallback.addEventListener('keydown', (e) => {
         if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); saveEditor(); }
+        if (e.altKey && e.shiftKey && e.code === 'KeyF') { e.preventDefault(); formatCode(); }
       });
       $('editorHost').append(fallback);
     }
@@ -417,6 +519,7 @@ initTester({
 
 $('editorSave').onclick = () => saveEditor({ close: true });
 $('editorSaveOnly').onclick = () => saveEditor();
+$('editorFormat').onclick = () => formatCode();
 $('editorCopyUrl').onclick = () => {
   const url = editing && publicUrl(editing.path);
   if (url) copyWithFeedback(url, 'URL');

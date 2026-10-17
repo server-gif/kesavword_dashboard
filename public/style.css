@@ -580,7 +580,7 @@ a.name:hover .name-text { color: var(--accent); }
 .monaco-editor .line-has-error { background: rgba(229, 72, 77, .10); }
 .monaco-editor .line-error-gutter { background: #e5484d; width: 3px !important; margin-left: 3px; }
 @media (max-width: 900px) {
-  #editorCopyUrl > span:not(.icon), #editorSaveOnly > span:not(.icon), #editorSaveOnly kbd { display: none; }
+  #editorCopyUrl > span:not(.icon), #editorFormat > span:not(.icon), #editorSaveOnly > span:not(.icon), #editorSaveOnly kbd { display: none; }
   .sheet-head { gap: 6px; }
 }
 
