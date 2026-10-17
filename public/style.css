@@ -241,13 +241,17 @@ kbd { font: 11px var(--mono); opacity: .7; margin-left: 2px; }
 [data-tip]:hover::after, [data-tip]:focus-visible::after { opacity: 1; transform: translateX(-50%) translateY(0); }
 /* Explanatory hints (KPI tiles, meters, status pills): a simple box that wraps, not one long line. */
 [data-tip].tip-long::after {
-  white-space: normal; width: max-content; max-width: 240px;
+  white-space: normal; width: max-content; max-width: min(240px, 72vw);
   line-height: 1.45; text-align: left; padding: 7px 9px;
 }
 /* Inside the scrollable monitoring body an above-the-element tip would clip at the container top,
    so there it drops below the element instead. */
 .sm-body [data-tip]::after { bottom: auto; top: calc(100% + 8px); transform: translateX(-50%) translateY(-3px); }
 .sm-body [data-tip]:hover::after, .sm-body [data-tip]:focus-visible::after { transform: translateX(-50%) translateY(0); }
+/* Near an edge (first/last strip block, outer tile) open the box inwards instead of centred, so the
+   scrolling card never cuts it in half. .tip-start / .tip-end are set on hover by servermon.js. */
+[data-tip].tip-start::after, [data-tip].tip-start:hover::after, [data-tip].tip-start:focus-visible::after { left: 0; right: auto; transform: none; }
+[data-tip].tip-end::after, [data-tip].tip-end:hover::after, [data-tip].tip-end:focus-visible::after { left: auto; right: 0; transform: none; }
 
 /* Collapsible sidebar rail (desktop only; mobile keeps the off-canvas drawer). */
 @media (min-width: 901px) {
@@ -974,11 +978,13 @@ a.btn { text-decoration: none; }
 
 /* health & uptime (real collected samples only) */
 .sm-health { display: flex; flex-direction: column; gap: 14px; }
-.sm-strip { display: flex; gap: 2px; width: 100%; height: 34px; }
+.sm-strip { display: flex; gap: 2px; width: 100%; height: 26px; }
 .sm-seg { flex: 1 1 0; min-width: 3px; border-radius: 3px; background: var(--surface-2); }
 .sm-seg.up { background: color-mix(in srgb, var(--success, #2fa84f) 72%, var(--surface)); }
 .sm-seg.down { background: color-mix(in srgb, var(--danger, #d64545) 82%, var(--surface)); }
-.sm-seg.none { background: var(--hover); }
+/* hatched, so "we never looked" reads as a deliberate gap rather than a rendering fault */
+.sm-seg.none { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--text-3) 40%, transparent) 0 2px, transparent 2px 5px); box-shadow: inset 0 0 0 1px var(--border); }
+.sm-seg:hover { outline: 1px solid var(--text-3); outline-offset: 1px; }
 /* the strip explained: what it is, what each colour means, which clock range each block covers */
 .sm-stripwrap { display: flex; flex-direction: column; gap: 7px; }
 .sm-stripblock { display: flex; flex-direction: column; gap: 6px; }
@@ -989,7 +995,7 @@ a.btn { text-decoration: none; }
 .sm-dot { width: 9px; height: 9px; border-radius: 3px; }
 .sm-dot.up { background: color-mix(in srgb, var(--success, #2fa84f) 72%, var(--surface)); }
 .sm-dot.down { background: color-mix(in srgb, var(--danger, #d64545) 82%, var(--surface)); }
-.sm-dot.none { background: var(--hover); border: 1px solid var(--border); }
+.sm-dot.none { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--text-3) 40%, transparent) 0 2px, transparent 2px 5px); border: 1px solid var(--border); }
 .sm-axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .sm-strip-note { font-size: 12px; line-height: 1.45; }
 .sm-events-block { display: flex; flex-direction: column; gap: 7px; }

@@ -529,6 +529,19 @@ const CHIP_TIPS = {
   none: 'No check ran in this window, so nothing is claimed for it — not up, not down.',
 };
 
+// A centred tooltip over the first or last strip block hangs off the scrolling card and gets cut, so
+// whichever edge is too close anchors the box to it instead. One listener covers every view's tips.
+function autoTipAnchor(e) {
+  const el = e.target.closest?.('[data-tip]');
+  if (!el || !el.dataset.tip) return;
+  const box = el.getBoundingClientRect();
+  const host = (el.closest('.sm-body') || document.body).getBoundingClientRect();
+  const half = 120; // half the widest box a tip is allowed to grow to
+  el.classList.toggle('tip-start', box.left - host.left < half);
+  el.classList.toggle('tip-end', host.right - box.right < half);
+}
+document.addEventListener('pointerover', autoTipAnchor, true);
+
 function statusDot(health) {
   const st = (health && health.status) || 'unknown';
   const map = {
@@ -549,9 +562,8 @@ function stripBlocks(hd, tip) {
   const blocks = h('div', { class: 'sm-strip' }, ...(hd.strip || []).map((v, i) => {
     const from = start + i * size;
     const state = v === 1 ? 'up' : v === 0 ? 'down' : 'none';
-    const when = `${timeLabel(from)} – ${timeLabel(from + size)}`;
-    const said = v === 1 ? 'answered the SSH check' : v === 0 ? 'no answer from the server' : 'no check ran here';
-    return h('div', { class: `sm-seg ${state} tip-long`, 'data-tip': `${when} · ${said}` });
+    // Short on purpose (one line): the long explanation lives on the legend chips and the title.
+    return h('div', { class: `sm-seg ${state}`, 'data-tip': `${timeLabel(from)} – ${timeLabel(from + size)} · ${CHIP_KEYS[state]}` });
   }));
   const axis = h('div', { class: 'sm-axis' }, h('span', {}, timeLabel(start)), h('span', {}, '12h ago'), h('span', {}, 'now'));
   return h('div', { class: 'sm-stripblock' },
