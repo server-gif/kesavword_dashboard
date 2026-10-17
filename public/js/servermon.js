@@ -427,8 +427,8 @@ function applyLive(host, health) {
     refs.sig = sig;
     const cs = slotEl('chart'); if (cs) cs.replaceChildren(trendCard(hd));
     const hs = slotEl('health'); if (hs) hs.replaceChildren(healthPanel(hd));
-    setLive('s-up24', hd.uptime && hd.uptime['24h'] ? `${uptimeText(hd.uptime['24h'])} (${coverageNote(hd.uptime['24h'])})` : '—');
-    setLive('s-up7', hd.uptime && hd.uptime['7d'] ? `${uptimeText(hd.uptime['7d'])} (${coverageNote(hd.uptime['7d'])})` : '—');
+    setLive('s-up24', uptimeLine(hd, '24h'));
+    setLive('s-up7', uptimeLine(hd, '7d'));
   }
   setLive('updated', state.meta && state.meta.refreshedAt ? `Updated ${timeAgo(state.meta.refreshedAt)}` : '');
   setLive('source', `Source: ${(state.meta && state.meta.source) || '—'}${state.meta && state.meta.refreshedAt ? ` \u00b7 ${fmtDate(state.meta.refreshedAt)}` : ''}`);
@@ -561,6 +561,14 @@ function stripBlocks(hd, tip) {
     blocks, axis);
 }
 
+// "100% · 18h watched of 24 hours" — the detail spec row uses the same wording as the overview tiles.
+function uptimeLine(hd, key) {
+  const u = (hd && hd.uptime && hd.uptime[key]) || null;
+  if (!u) return '—';
+  const w = WINDOWS[key];
+  return `${uptimeText(u)} · ${u.coverageMs >= w.ms * 0.98 ? `all ${w.title} watched` : `${spanText(u.coverageMs)} watched of ${w.title}`}`;
+}
+
 function uptimeCell(hd, key) {
   const w = WINDOWS[key];
   const u = (hd.uptime && hd.uptime[key]) || null;
@@ -592,7 +600,7 @@ function healthPanel(health) {
   const strip = stripBlocks(hd, `Each block is one 30-minute window of the last 24 hours — oldest on the left, newest on the right. ${checked} of ${windows.length} windows hold a real check${since ? `; recording started ${since}` : ''}. Hover any block for its exact time.`);
   const note = h('div', { class: 'muted sm-strip-note' },
     checked ? `${answered} of ${checked} checked window${checked === 1 ? '' : 's'} answered${missed ? `, ${missed} did not` : ' — none failed'}.` : `No window in the last 24 hours has a check yet (${coverageNote(hd.uptime && hd.uptime['24h'])}).`,
-    grey ? ` ${grey} window${grey === 1 ? '' : 's'} were never probed${since ? ` — that is the time before recording started ${since}` : ', so nothing is claimed for them'}.` : '');
+    grey ? ` ${grey} window${grey === 1 ? '' : 's'} were never probed${since ? ` — they cover the time before recording started (${since})` : ', so nothing is claimed for them'}.` : '');
   const upTiles = h('div', { class: 'sm-uptime' }, uptimeCell(hd, '24h'), uptimeCell(hd, '7d'));
   const events = hd.events || [];
   const eventBlock = h('div', { class: 'sm-events-block' },
@@ -759,7 +767,7 @@ async function detailView() {
 
   const m = server.metrics || {};
   const hd = state.health || {};
-  const upCell = (w) => (hd.uptime && hd.uptime[w]) ? `${uptimeText(hd.uptime[w])} (${coverageNote(hd.uptime[w])})` : '—';
+  const upCell = (w) => uptimeLine(hd, w);
   const spec = [
     ['Hostname', server.hostname || '—'],
     ['Provider', server.provider || '—'],
