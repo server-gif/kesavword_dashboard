@@ -330,6 +330,8 @@ await test('buildHealth: empty -> unknown, no uptime, blank strip', () => {
   assert.deepEqual(b.events, []);
   assert.equal(b.strip.length, 48);
   assert.ok(b.strip.every((v) => v === null));
+  assert.equal(b.generatedAt, NOW); // the UI cuts its 30-minute labels from this
+  assert.equal(b.firstSampleAt, null);
 });
 
 await test('buildHealth: all-up window -> 100% with honest coverage', () => {
@@ -339,6 +341,7 @@ await test('buildHealth: all-up window -> 100% with honest coverage', () => {
   assert.equal(b.status, 'up');
   assert.equal(b.uptime['24h'].pct, 100);
   assert.equal(b.uptime['24h'].coverageMs, 6 * hr); // only the observed span counts, never the empty 18h
+  assert.equal(b.firstSampleAt, NOW - 6 * hr);      // when recording actually starts
   assert.deepEqual(b.events, []);
 });
 

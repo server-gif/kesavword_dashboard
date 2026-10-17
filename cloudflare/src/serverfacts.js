@@ -397,6 +397,10 @@ export function buildHealth(samples, now = Date.now(), totals = null) {
   return {
     hasData: s.length > 0,
     count: s.length,
+    // When this view was built and when recording starts: the UI labels each 30-minute strip window
+    // with real clock times, so it must know the same "now" the buckets were cut from.
+    generatedAt: now,
+    firstSampleAt: s.length ? s[0].t : null,
     status: last ? (last.up ? 'up' : 'down') : 'unknown',
     lastSampleAt: last ? last.t : null,
     current: last ? { cpu: last.cpu ?? null, load1: last.load1 ?? null, memPct: last.memPct ?? null, diskPct: last.diskPct ?? null } : null,

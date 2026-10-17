@@ -507,10 +507,73 @@ function coverageNote(u) {
   return `${Math.round(hrs / 24)}d observed`;
 }
 
+// Same duration without the word, so it can be read inside a sentence: "18h watched of 7 days".
+function spanText(ms) {
+  const hrs = ms / 3600e3;
+  if (hrs < 1) return `${Math.max(1, Math.round(ms / 60000))} min`;
+  if (hrs < 48) return `${Math.round(hrs)}h`;
+  return `${Math.round(hrs / 24)}d`;
+}
+
+// Must match the server's strip: 48 fixed windows covering the last 24 hours.
+const STRIP_BUCKETS = 48;
+const STRIP_WINDOW_MS = 24 * 3600e3;
+const WINDOWS = {
+  '24h': { title: '24 hours', ms: STRIP_WINDOW_MS },
+  '7d': { title: '7 days', ms: 7 * STRIP_WINDOW_MS },
+};
+const CHIP_KEYS = { up: 'answered', down: 'no answer', none: 'not checked' };
+const CHIP_TIPS = {
+  up: 'The server answered the SSH check in this 30-minute window.',
+  down: 'No answer from the server in this window. Your website can still have been serving traffic — this block is about the SSH check.',
+  none: 'No check ran in this window, so nothing is claimed for it — not up, not down.',
+};
+
 function statusDot(health) {
-  const map = { up: ['badge-green', 'Online'], down: ['badge-amber', 'Not responding'], unknown: ['badge-gray', 'Unknown'] };
-  const [cls, label] = map[(health && health.status) || 'unknown'] || map.unknown;
-  return h('span', { class: `badge ${cls}` }, label);
+  const st = (health && health.status) || 'unknown';
+  const map = {
+    up: ['badge-green', 'Online', 'The last SSH check from this dashboard was answered. It is not a test of your website pages or APIs.'],
+    down: ['badge-amber', 'Not responding', 'The last SSH check was not answered — the server could not be reached from the dashboard at that moment.'],
+    unknown: ['badge-gray', 'Unknown', 'No check has landed yet, so the state is genuinely unknown rather than reported.'],
+  };
+  const [cls, label, tip] = map[st] || map.unknown;
+  return h('span', { class: `badge ${cls} tip-long`, 'data-tip': tip }, label);
+}
+
+// One block per 30-minute window, each labelled with the real clock range it stands for, plus the
+// axis it sits on — so the bar reads as a timeline instead of a row of mystery squares.
+function stripBlocks(hd, tip) {
+  const end = hd.generatedAt || Date.now();
+  const start = end - STRIP_WINDOW_MS;
+  const size = STRIP_WINDOW_MS / STRIP_BUCKETS;
+  const blocks = h('div', { class: 'sm-strip' }, ...(hd.strip || []).map((v, i) => {
+    const from = start + i * size;
+    const state = v === 1 ? 'up' : v === 0 ? 'down' : 'none';
+    const when = `${timeLabel(from)} – ${timeLabel(from + size)}`;
+    const said = v === 1 ? 'answered the SSH check' : v === 0 ? 'no answer from the server' : 'no check ran here';
+    return h('div', { class: `sm-seg ${state} tip-long`, 'data-tip': `${when} · ${said}` });
+  }));
+  const axis = h('div', { class: 'sm-axis' }, h('span', {}, timeLabel(start)), h('span', {}, '12h ago'), h('span', {}, 'now'));
+  return h('div', { class: 'sm-stripblock' },
+    h('div', { class: 'sm-strip-head' },
+      h('div', { class: 'sm-strip-title tip-long', 'data-tip': tip }, 'Did the server answer? · last 24 hours'),
+      h('div', { class: 'sm-chips' }, ...Object.keys(CHIP_KEYS).map((k) => h('span', { class: 'sm-chip tip-long', 'data-tip': CHIP_TIPS[k] }, h('i', { class: `sm-dot ${k}` }), CHIP_KEYS[k])))),
+    blocks, axis);
+}
+
+function uptimeCell(hd, key) {
+  const w = WINDOWS[key];
+  const u = (hd.uptime && hd.uptime[key]) || null;
+  const watched = u && u.coverageMs ? u.coverageMs : 0;
+  const full = watched >= w.ms * 0.98;
+  const since = hd.firstSampleAt ? timeAgo(hd.firstSampleAt) : null;
+  const tip = u
+    ? `Share of the time we actually watched in the last ${w.title} when the server answered an SSH check. History covers ${spanText(watched)} of ${w.title}${since ? `, recording started ${since}` : ''}${full ? '.' : ' — the rest is unknown, so it is never counted as uptime.'}${!full && key === '7d' ? ' This is why the 7-day figure looks the same as the 24-hour one today.' : ''}`
+    : `No SSH check has landed in the last ${w.title} yet, so there is nothing honest to show.`;
+  return h('div', { class: 'sm-up-cell tip-long', 'data-tip': tip },
+    h('div', { class: 'sm-up-k' }, `Uptime · ${w.title}`),
+    h('div', { class: 'sm-up-v' }, uptimeText(u)),
+    h('div', { class: 'muted sm-up-n' }, u ? (full ? `all ${w.title} watched` : `${spanText(watched)} watched of ${w.title}`) : coverageNote(u)));
 }
 
 function healthPanel(health) {
@@ -520,23 +583,30 @@ function healthPanel(health) {
       h('div', { class: 'ov-card-head' }, h('div', {}, h('div', { class: 'ov-card-title' }, 'Health & uptime'), h('div', { class: 'ov-card-sub' }, 'Up/down history is being collected.'))),
       banner('info', 'Nothing here is invented: the first readings appear as automatic checks run (about every 30 minutes, and whenever you refresh). Once enough accumulate you\u2019ll see uptime %, an up/down timeline and a list of up/down events.'));
   }
-  // Each block carries its own themed tip; the container deliberately has none (hover would stack two tooltips).
-  const strip = h('div', { class: 'sm-strip' },
-    ...(hd.strip || []).map((v) => h('div', { class: `sm-seg ${v === 1 ? 'up' : v === 0 ? 'down' : 'none'}`, 'data-tip': v === 1 ? 'up' : v === 0 ? 'down' : 'no check' })));
-  const upTiles = h('div', { class: 'sm-uptime' },
-    h('div', { class: 'sm-up-cell' }, h('div', { class: 'sm-up-k' }, 'Uptime · 24h'), h('div', { class: 'sm-up-v' }, uptimeText(hd.uptime && hd.uptime['24h'])), h('div', { class: 'muted sm-up-n' }, coverageNote(hd.uptime && hd.uptime['24h']))),
-    h('div', { class: 'sm-up-cell' }, h('div', { class: 'sm-up-k' }, 'Uptime · 7d'), h('div', { class: 'sm-up-v' }, uptimeText(hd.uptime && hd.uptime['7d'])), h('div', { class: 'muted sm-up-n' }, coverageNote(hd.uptime && hd.uptime['7d']))));
+  const windows = hd.strip || [];
+  const checked = windows.filter((v) => v !== null).length;
+  const answered = windows.filter((v) => v === 1).length;
+  const missed = windows.filter((v) => v === 0).length;
+  const grey = windows.length - checked;
+  const since = hd.firstSampleAt ? timeAgo(hd.firstSampleAt) : null;
+  const strip = stripBlocks(hd, `Each block is one 30-minute window of the last 24 hours — oldest on the left, newest on the right. ${checked} of ${windows.length} windows hold a real check${since ? `; recording started ${since}` : ''}. Hover any block for its exact time.`);
+  const note = h('div', { class: 'muted sm-strip-note' },
+    checked ? `${answered} of ${checked} checked window${checked === 1 ? '' : 's'} answered${missed ? `, ${missed} did not` : ' — none failed'}.` : `No window in the last 24 hours has a check yet (${coverageNote(hd.uptime && hd.uptime['24h'])}).`,
+    grey ? ` ${grey} window${grey === 1 ? '' : 's'} were never probed${since ? ` — that is the time before recording started ${since}` : ', so nothing is claimed for them'}.` : '');
+  const upTiles = h('div', { class: 'sm-uptime' }, uptimeCell(hd, '24h'), uptimeCell(hd, '7d'));
   const events = hd.events || [];
-  const eventList = events.length
-    ? h('div', { class: 'sm-events' }, ...events.map((ev) => h('div', { class: 'sm-event' },
-        h('span', { class: `badge ${ev.up ? 'badge-green' : 'badge-amber'}` }, ev.up ? 'Up' : 'Down'),
-        h('span', { class: 'muted' }, timeAgo(ev.t)))))
-    : h('div', { class: 'muted sm-noevents' }, 'No up/down changes recorded yet — the server has stayed reachable.');
+  const eventBlock = h('div', { class: 'sm-events-block' },
+    h('div', { class: 'sm-sec-head tip-long', 'data-tip': 'Every moment the server flipped between answering and not answering an SSH check, newest first. Only real checks create a line here.' }, 'Up/down changes'),
+    events.length
+      ? h('div', { class: 'sm-events' }, ...events.map((ev) => h('div', { class: 'sm-event' },
+          h('span', { class: `badge ${ev.up ? 'badge-green' : 'badge-amber'}` }, ev.up ? 'Up' : 'Down'),
+          h('span', { class: 'muted' }, timeAgo(ev.t)))))
+      : h('div', { class: 'muted sm-noevents' }, `No changes in the ${hd.count} check${hd.count === 1 ? '' : 's'} recorded so far — the server answered every one.`));
   return h('div', { class: 'card ov-card sm-health' },
     h('div', { class: 'ov-card-head' }, h('div', {},
       h('div', { class: 'ov-card-title' }, 'Health & uptime'),
-      h('div', { class: 'ov-card-sub' }, 'Current: ', statusDot(hd), h('span', { class: 'muted' }, ` · last check ${hd.lastSampleAt ? timeAgo(hd.lastSampleAt) : '—'}`)))),
-    strip, upTiles, eventList,
+      h('div', { class: 'ov-card-sub' }, 'Right now: ', statusDot(hd), h('span', { class: 'muted tip-long', 'data-tip': `When the dashboard last probed the server over SSH — automatically on your refresh interval and whenever you press Refresh. ${hd.count} check${hd.count === 1 ? '' : 's'} are recorded in total.` }, ` · last check ${hd.lastSampleAt ? timeAgo(hd.lastSampleAt) : '—'}`)))),
+    h('div', { class: 'sm-stripwrap' }, strip, note), upTiles, eventBlock,
     h('div', { class: 'muted sm-health-foot' }, '“Down” means the server did not answer an SSH check at that moment; it is not the same as your website being healthy.'));
 }
 
