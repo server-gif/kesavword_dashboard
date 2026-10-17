@@ -7,6 +7,10 @@ compatibility_date = "2025-06-01"
 # nodejs_compat gives the Worker Node built-ins (Buffer, stream, zlib) and cloudflare:sockets,
 # which the SSH/SFTP connection uses. ssh2 runs in its pure-JavaScript crypto mode.
 compatibility_flags = ["nodejs_compat"]
+# Pinned on purpose: this project has been deployed with two different Cloudflare logins, and wrangler
+# silently uses whatever account the active token/OAuth session defaults to (the D1 database then just
+# "doesn't exist"). With the id here, a deploy aimed at the wrong account fails loudly instead.
+account_id = "af34905ea22dd12f78b055fee6e3a890"
 
 # Pre-bundle with esbuild (stubs ssh2's optional native cpu-features binary) before upload.
 [build]
