@@ -276,6 +276,47 @@ await test('cache: snapshot-write failure -> live data + snapshotSaved:false', a
   assert.equal(r.snapshotSaved, false);
 });
 
+// ---------- deadline (a round-trip that never returns must not wedge the reader) ----------
+await test('deadline: abandons a promise that never settles, passes real results and errors through', async () => {
+  const started = Date.now();
+  await assert.rejects(
+    sf.deadline(new Promise(() => {}), 30, 'The server took too long to answer the status check.'),
+    (e) => e instanceof sf.MonitorError && e.status === 504 && /took too long/.test(e.message),
+  );
+  assert.ok(Date.now() - started < 3000, 'the guard fired');
+  assert.equal(await sf.deadline(Promise.resolve('value'), 300), 'value');
+  await assert.rejects(sf.deadline(Promise.reject(new Error('ssh blew up')), 300), /ssh blew up/);
+  // the probe budget has to stay inside the Worker's own request wall-clock limit
+  assert.ok(sf.PROBE_TIMEOUT_MS > 5000 && sf.PROBE_TIMEOUT_MS < 30000, `PROBE_TIMEOUT_MS=${sf.PROBE_TIMEOUT_MS}`);
+});
+
+await test('cache: a stuck in-flight probe never blocks a reader that already has a snapshot', async () => {
+  const host = sf.normalizeHost(sf.parseRecords(PROBE_STDOUT), ENV);
+  let clock = 1000;
+  let stuck = false;
+  const collect = () => (stuck ? new Promise(() => {}) : Promise.resolve({ host, fetchedAt: clock }));
+  const store = fakeStore();
+  const cache = sf.createHostCache({
+    readCache: store.readCache, writeCache: store.writeCache, collect, now: () => clock, inflightGraceMs: 6000,
+  });
+  const first = await cache.load('k', ENV);
+  assert.equal(first.source, 'live');
+
+  stuck = true;
+  const hung = cache.load('k', ENV, { fresh: true }); // a probe that will never come back
+  hung.catch(() => {});
+  clock = 10000; // past the grace window: the next reader must not queue behind it
+
+  const second = await Promise.race([
+    cache.load('k', ENV, { fresh: true }),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('reader is wedged behind the stuck probe')), 500)),
+  ]);
+  assert.equal(second.source, 'cache');
+  assert.equal(second.stale, false);
+  assert.equal(second.refreshedAt, 1000); // the real earlier reading, never stamped "now"
+  assert.equal(second.servers.length, 1);
+});
+
 // ---------- sample shapes ----------
 await test('toSample / downSample: capture metrics from a host, nulls on down', () => {
   const host = sf.normalizeHost(sf.parseRecords(PROBE_STDOUT), ENV);

@@ -178,13 +178,15 @@ function draw(content) {
 
 async function getStatus() {
   if (state.status) return state.status;
-  state.status = await api('GET', `/api/${S}/status`);
+  state.status = await api('GET', `/api/${S}/status`, null, { timeoutMs: 12000 });
   return state.status;
 }
 
 async function getServers(force) {
   if (state.servers && !force) return state.servers;
-  const data = await api('GET', `/api/${S}/servers${force ? '?fresh=1' : ''}`);
+  // The Worker answers this from a ~15s SSH deadline at the latest, so the page gives up shortly
+  // after that and shows the retry banner instead of sitting on a request that never returns.
+  const data = await api('GET', `/api/${S}/servers${force ? '?fresh=1' : ''}`, null, { timeoutMs: 25000 });
   state.servers = Array.isArray(data.servers) ? data.servers : [];
   state.meta = data;
   return state.servers;
@@ -192,13 +194,13 @@ async function getServers(force) {
 
 async function getHealth(force) {
   if (state.health && !force) return state.health;
-  state.health = await api('GET', `/api/${S}/health`);
+  state.health = await api('GET', `/api/${S}/health`, null, { timeoutMs: 15000 });
   return state.health;
 }
 
 async function getSettings() {
   if (state.settings) return state.settings;
-  try { state.settings = await api('GET', `/api/${S}/settings`); } catch { state.settings = null; }
+  try { state.settings = await api('GET', `/api/${S}/settings`, null, { timeoutMs: 10000 }); } catch { state.settings = null; }
   return state.settings;
 }
 
@@ -761,7 +763,7 @@ async function detailView() {
   let server = (state.servers || []).find((s) => String(s.id) === String(id));
   let meta = { source: server ? 'cache' : null };
   try {
-    const data = await api('GET', `/api/${S}/servers/${encodeURIComponent(id)}`);
+    const data = await api('GET', `/api/${S}/servers/${encodeURIComponent(id)}`, null, { timeoutMs: 25000 });
     server = data.server || server;
     meta = data;
   } catch (err) {

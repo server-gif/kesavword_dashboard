@@ -45,20 +45,28 @@ const isConnError = (err) => /handshake|socket|closed|reset|econn|timeout|aborte
 );
 
 // Open an authenticated SSH connection (no SFTP session yet) and resolve to { conn, sock }.
-function openConnectionEntry(env) {
+// Every wait here carries an explicit deadline: a cloudflare:sockets TCP connection can sit there
+// forever when the far end drops the SYN (no error, no 'connect' event), and ssh2's own readyTimeout
+// only speaks once the socket exists. An un-settled promise would hang this request and, because the
+// cache controller de-dupes concurrent probes, every later reader too — so the guard rejects and
+// destroys the socket instead.
+function openConnectionEntry(env, { timeoutMs = 14000 } = {}) {
   return new Promise((resolve, reject) => {
     const raw = connect({ hostname: env.SFTP_HOST, port: Number(env.SFTP_PORT || 22) }, { allowCustomCertificate: true });
     const sock = toDuplex(raw);
     const conn = new Client();
     let settled = false;
-    const fail = (err) => { if (!settled) { settled = true; try { conn.end(); } catch {} reject(err); } };
-    conn.on('ready', () => { settled = true; resolve({ conn, sock, at: Date.now(), alive: true }); });
+    const teardown = () => { try { conn.end(); } catch {} try { sock.destroy(); } catch {} };
+    let guard;
+    const fail = (err) => { if (settled) return; settled = true; clearTimeout(guard); teardown(); reject(err); };
+    guard = setTimeout(() => fail(new Error('SSH connection timed out')), timeoutMs);
+    conn.on('ready', () => { if (settled) return; settled = true; clearTimeout(guard); resolve({ conn, sock, at: Date.now(), alive: true }); });
     conn.on('error', fail);
     conn.connect({
       sock,
       username: env.SFTP_USER,
       ...(env.SFTP_KEY ? { privateKey: env.SFTP_KEY } : { password: env.SFTP_PASS }),
-      readyTimeout: 25000,
+      readyTimeout: Math.max(1000, timeoutMs - 2000), // ssh2 reports the handshake failure itself, just before the guard
       algorithms: {
         // The server accepts curve25519, but the Workers/workerd runtime cannot derive its
         // shared secret (node:crypto X25519 is unavailable to ssh2 here), so we must use the
@@ -70,7 +78,12 @@ function openConnectionEntry(env) {
   });
 }
 
-const openSession = (conn) => new Promise((res, rej) => conn.sftp((err, sftp) => (err ? rej(err) : res(sftp))));
+// Opening the SFTP subsystem is a second round-trip on the already-connected socket: a server that
+// finishes the handshake but never grants the channel would otherwise hang here instead.
+const openSession = (conn, timeoutMs = 8000) => new Promise((res, rej) => {
+  const guard = setTimeout(() => rej(new Error('SSH channel timed out')), timeoutMs);
+  conn.sftp((err, sftp) => { clearTimeout(guard); if (err) rej(err); else res(sftp); });
+});
 
 // Promisified sftp primitives the dashboard needs, under the ssh2-sftp-client method names.
 function makeWrapper(conn, sftp, sock, shared) {
@@ -234,10 +247,10 @@ function makeWrapper(conn, sftp, sock, shared) {
 // Open a fresh authenticated connection + SFTP session per request and tear it down after.
 // (Reusing a connection across concurrent requests deadlocks ssh2's channel handling, so we
 // never pool — the cheap KEX above is what keeps the per-request handshake fast instead.)
-async function withSftp(env, fn) {
-  const entry = await openConnectionEntry(env);
+async function withSftp(env, fn, { connectTimeoutMs = 14000, channelTimeoutMs = 8000 } = {}) {
+  const entry = await openConnectionEntry(env, { timeoutMs: connectTimeoutMs });
   try {
-    const sftp = await openSession(entry.conn);
+    const sftp = await openSession(entry.conn, channelTimeoutMs);
     const c = makeWrapper(entry.conn, sftp, entry.sock, false);
     return await fn(c);
   } finally {

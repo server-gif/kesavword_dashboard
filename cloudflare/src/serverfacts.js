@@ -193,14 +193,29 @@ export function parseId(x) {
   return n;
 }
 
+// A round-trip that never comes back is worse than a failed one: the caller (and every reader that
+// joined the same in-flight probe) would wait forever. Race it against a deadline so the cache
+// controller always gets to answer — live if the server replied, last-good snapshot if it did not.
+export function deadline(promise, ms, message = 'The server did not answer in time.') {
+  const settled = Promise.resolve(promise);
+  settled.catch(() => {}); // the abandoned round-trip may still fail later; nothing is waiting on it
+  let guard;
+  const timer = new Promise((_, reject) => { guard = setTimeout(() => reject(new MonitorError(504, message)), ms); });
+  return Promise.race([settled, timer]).finally(() => clearTimeout(guard));
+}
+
+// A healthy probe is a ~2s round-trip; anything past this is treated as stuck, not slow.
+export const PROBE_TIMEOUT_MS = 15000;
+
 // Open the existing SSH channel and run the probe once, returning the normalized host.
 export async function collectHost(env) {
   if (!hasCreds(env)) throw new MonitorError(503, 'The server connection is not configured, so its facts cannot be read.');
   let res;
   try {
     const { withSftp } = await import('./sftp.js');
-    res = await withSftp(env, (k) => k.exec(PROBE));
+    res = await deadline(withSftp(env, (k) => k.exec(PROBE)), PROBE_TIMEOUT_MS, 'The server took too long to answer the status check.');
   } catch (err) {
+    if (err instanceof MonitorError && err.status === 504) throw err; // our own deadline, already generic
     // Never surface the underlying SSH error text (it can carry host/user detail); a fixed message only.
     throw new MonitorError(502, 'Could not reach the server over SSH just now.');
   }
@@ -222,9 +237,9 @@ export async function getHost(env) {
 // provider API. The durable last-good snapshot lives in the existing D1 `cache` table via the injected
 // readCache/writeCache; the in-isolate Map is only a fast TTL layer. Concurrent (even ?fresh=1)
 // requests share a single SSH round-trip via the in-flight de-dupe (SSH handshakes are expensive).
-export function createHostCache({ readCache, writeCache, now = () => Date.now(), l1Ttl = 30000, collect = collectHost } = {}) {
+export function createHostCache({ readCache, writeCache, now = () => Date.now(), l1Ttl = 30000, collect = collectHost, inflightGraceMs = 6000 } = {}) {
   const good = new Map();     // key -> { at, host } — last-known-good in this isolate
-  const inflight = new Map(); // key -> Promise (de-dupes concurrent, including fresh)
+  const inflight = new Map(); // key -> { at, promise } (de-dupes concurrent, including fresh)
 
   function pack(host, at, source, extra) {
     return { servers: [host], host, refreshedAt: at, source, stale: false, partial: false, ...extra };
@@ -237,7 +252,15 @@ export function createHostCache({ readCache, writeCache, now = () => Date.now(),
       const g = good.get(key);
       if (g && t - g.at < l1Ttl) return pack(g.host, g.at, 'cache', { snapshotSaved: true });
     }
-    if (inflight.has(key)) return inflight.get(key); // never fire duplicate/parallel SSH round-trips
+    const pending = inflight.get(key);
+    if (pending) {
+      // One round-trip at a time: normally this reader simply joins the probe already running. But
+      // if that probe has been out for longer than a healthy one takes, the reader gets the last good
+      // snapshot instead of piling up behind it — a stuck SSH attempt must never freeze the page.
+      const g = good.get(key);
+      if (g && t - pending.at > inflightGraceMs) return pack(g.host, g.at, 'cache', { snapshotSaved: true });
+      return pending.promise;
+    }
 
     const run = (async () => {
       const disk = await Promise.resolve(readCache ? readCache(key) : null).catch(() => null);
@@ -270,7 +293,7 @@ export function createHostCache({ readCache, writeCache, now = () => Date.now(),
       }
     })().finally(() => inflight.delete(key));
 
-    inflight.set(key, run);
+    inflight.set(key, { at: t, promise: run });
     return run;
   }
 
