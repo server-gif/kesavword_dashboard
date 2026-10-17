@@ -239,6 +239,15 @@ kbd { font: 11px var(--mono); opacity: .7; margin-left: 2px; }
   z-index: 200;
 }
 [data-tip]:hover::after, [data-tip]:focus-visible::after { opacity: 1; transform: translateX(-50%) translateY(0); }
+/* Explanatory hints (KPI tiles, meters, status pills): a simple box that wraps, not one long line. */
+[data-tip].tip-long::after {
+  white-space: normal; width: max-content; max-width: 240px;
+  line-height: 1.45; text-align: left; padding: 7px 9px;
+}
+/* Inside the scrollable monitoring body an above-the-element tip would clip at the container top,
+   so there it drops below the element instead. */
+.sm-body [data-tip]::after { bottom: auto; top: calc(100% + 8px); transform: translateX(-50%) translateY(-3px); }
+.sm-body [data-tip]:hover::after, .sm-body [data-tip]:focus-visible::after { transform: translateX(-50%) translateY(0); }
 
 /* Collapsible sidebar rail (desktop only; mobile keeps the off-canvas drawer). */
 @media (min-width: 901px) {
@@ -957,7 +966,7 @@ a.btn { text-decoration: none; }
 /* server detail metadata */
 .sm-detail-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .sm-detail-title { margin: 0; font-size: 18px; font-weight: 650; }
-.sm-meta { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.sm-meta { display: flex; flex-direction: column; padding: 0; overflow: visible; } /* visible so themed tooltips on rows aren't clipped by the card */
 .sm-meta-row { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 12px; padding: 10px 16px; border-top: 1px solid var(--border); }
 .sm-meta-row:first-child { border-top: 0; }
 .sm-meta-k { color: var(--text-3); font-size: 13px; }

@@ -43,7 +43,7 @@ function toolbar() {
   const seg = h('div', { class: 'seg' }, ...tabs.map(([k, l]) =>
     h('button', { class: activeFor(k) ? 'active' : '', onclick: () => go(k) }, l)));
   const updated = h('span', { class: 'ov-updated', 'data-live': 'updated' }, state.meta && state.meta.refreshedAt ? `Updated ${timeAgo(state.meta.refreshedAt)}` : '');
-  const refresh = h('button', { class: 'icon-btn', title: 'Refresh now \u2014 re-read the server over SSH', 'data-tip': 'Refresh now', onclick: () => refreshNow() }, icon('refresh', 16));
+  const refresh = h('button', { class: 'icon-btn', 'data-tip': 'Refresh now \u2014 re-read the server over SSH', onclick: () => refreshNow() }, icon('refresh', 16));
 
   const parts = [seg, h('span', { class: 'spacer' })];
   if (canLive()) {
@@ -51,7 +51,7 @@ function toolbar() {
       h('span', { class: `live-dot${state.live ? ' on' : ''}`, 'data-live': 'live-dot' }),
       h('span', { 'data-live': 'live-state' }, state.live ? 'Live' : 'Paused'),
       h('span', { class: 'live-count', 'data-live': 'next' }, ''));
-    const btn = h('button', { class: 'btn btn-sm', 'data-live': 'live-btn', title: state.live ? 'Pause automatic refresh' : 'Resume automatic refresh', onclick: () => toggleLive() }, state.live ? 'Pause' : 'Go live');
+    const btn = h('button', { class: 'btn btn-sm', 'data-live': 'live-btn', 'data-tip': state.live ? 'Pause automatic refresh' : 'Resume automatic refresh', onclick: () => toggleLive() }, state.live ? 'Pause' : 'Go live');
     parts.push(pill, intervalSelect(), btn);
   }
   parts.push(updated, refresh);
@@ -276,7 +276,7 @@ function syncLiveChrome() {
   if (btn) {
     const want = state.live ? 'Pause' : 'Go live';
     if (btn.textContent !== want) btn.textContent = want;
-    btn.title = state.live ? 'Pause automatic refresh' : 'Resume automatic refresh';
+    btn.setAttribute('data-tip', state.live ? 'Pause automatic refresh' : 'Resume automatic refresh');
   }
   const next = liveEl('next');
   if (next) next.textContent = state.live && nextAt ? ` \u00b7 next ${Math.max(0, Math.round((nextAt - Date.now()) / 1000))}s` : '';
@@ -358,9 +358,10 @@ function normPct(x) { const n = Number(x); return (x == null || !Number.isFinite
 // are rebuilt then and not on every numeric-only tick.
 function healthSig(health) { const hd = health || {}; return `${hd.count || 0}|${hd.status || ''}|${hd.lastSampleAt || 0}`; }
 
-// local KPI tile mirroring charts.js tile() but with a tagged value node for live updates
-function kpiTile(key, label, valueText, sub, title) {
-  return h('div', { class: 'kpi', title: title || null },
+// local KPI tile mirroring charts.js tile() but with a tagged value node for live updates.
+// The explanation shows as the dashboard's own themed tooltip (tip-long), not the slow native one.
+function kpiTile(key, label, valueText, sub, tip) {
+  return h('div', { class: tip ? 'kpi tip-long' : 'kpi', 'data-tip': tip || null },
     h('div', { class: 'kpi-label' }, label),
     h('div', { class: 'kpi-value', 'data-live': `v-${key}` }, valueText == null ? '—' : String(valueText)),
     sub);
@@ -369,17 +370,21 @@ function kpiDelta(key, text) { return h('div', { class: 'kpi-delta', 'data-live'
 
 function meter(key, name, pct, detail) {
   const p = normPct(pct);
-  return h('div', { class: 'barlist-row', title: `${name}: ${p == null ? 'not available' : p + '%'}` },
+  return h('div', { class: 'barlist-row tip-long', 'data-tip': `${name}: ${p == null ? 'not available' : p + '%'}` },
     h('div', { class: 'barlist-label' }, h('span', {}, name)),
     h('div', { class: 'barlist-track' }, h('span', { class: `barlist-bar${p != null && p >= 85 ? ' hot' : ''}`, 'data-live': `m-${key}-bar`, style: `width:${p == null ? 0 : p}%` })),
     h('div', { class: 'barlist-value' },
       h('span', { 'data-live': `m-${key}-v` }, p == null ? '—' : `${p}%`),
       detail ? h('span', { class: 'muted', 'data-live': `m-${key}-d` }, ` \u00b7 ${detail}`) : null));
 }
-function applyMeter(key, pct, detail) {
+function applyMeter(key, name, pct, detail) {
   const p = normPct(pct);
   const bar = liveEl(`m-${key}-bar`);
-  if (bar) { bar.style.width = `${p == null ? 0 : p}%`; bar.classList.toggle('hot', p != null && p >= 85); }
+  if (bar) {
+    bar.style.width = `${p == null ? 0 : p}%`; bar.classList.toggle('hot', p != null && p >= 85);
+    const row = bar.closest('.barlist-row');
+    if (row) row.setAttribute('data-tip', `${name}: ${p == null ? 'not available' : p + '%'}`); // keep the themed hint current too
+  }
   setLive(`m-${key}-v`, p == null ? '—' : `${p}%`);
   if (detail != null) setLive(`m-${key}-d`, ` \u00b7 ${detail}`);
 }
@@ -387,9 +392,9 @@ function applyMeters(host) {
   const m = (host && host.metrics) || {};
   const mem = m.memory || {};
   const disk = m.disk || {};
-  applyMeter('cpu', m.cpuPct, m.cores != null ? `busy of ${m.cores} core${m.cores === 1 ? '' : 's'}` : null);
-  applyMeter('mem', mem.usedPct, mem.totalMb != null ? `${round1((mem.usedMb || 0) / 1024)} / ${round1(mem.totalMb / 1024)} GB used` : null);
-  applyMeter('disk', disk.usedPct, disk.totalGb != null ? `${round1(disk.usedGb)} / ${round1(disk.totalGb)} GB used` : null);
+  applyMeter('cpu', 'CPU', m.cpuPct, m.cores != null ? `busy of ${m.cores} core${m.cores === 1 ? '' : 's'}` : null);
+  applyMeter('mem', 'Memory', mem.usedPct, mem.totalMb != null ? `${round1((mem.usedMb || 0) / 1024)} / ${round1(mem.totalMb / 1024)} GB used` : null);
+  applyMeter('disk', 'Disk', disk.usedPct, disk.totalGb != null ? `${round1(disk.usedGb)} / ${round1(disk.totalGb)} GB used` : null);
 }
 
 // The single live-refresh routine for Overview / Servers / Detail. Each setLive is a no-op where the
@@ -515,8 +520,9 @@ function healthPanel(health) {
       h('div', { class: 'ov-card-head' }, h('div', {}, h('div', { class: 'ov-card-title' }, 'Health & uptime'), h('div', { class: 'ov-card-sub' }, 'Up/down history is being collected.'))),
       banner('info', 'Nothing here is invented: the first readings appear as automatic checks run (about every 30 minutes, and whenever you refresh). Once enough accumulate you\u2019ll see uptime %, an up/down timeline and a list of up/down events.'));
   }
-  const strip = h('div', { class: 'sm-strip', title: 'Last 24 hours' },
-    ...(hd.strip || []).map((v) => h('div', { class: `sm-seg ${v === 1 ? 'up' : v === 0 ? 'down' : 'none'}`, title: v === 1 ? 'up' : v === 0 ? 'down' : 'no check' })));
+  // Each block carries its own themed tip; the container deliberately has none (hover would stack two tooltips).
+  const strip = h('div', { class: 'sm-strip' },
+    ...(hd.strip || []).map((v) => h('div', { class: `sm-seg ${v === 1 ? 'up' : v === 0 ? 'down' : 'none'}`, 'data-tip': v === 1 ? 'up' : v === 0 ? 'down' : 'no check' })));
   const upTiles = h('div', { class: 'sm-uptime' },
     h('div', { class: 'sm-up-cell' }, h('div', { class: 'sm-up-k' }, 'Uptime · 24h'), h('div', { class: 'sm-up-v' }, uptimeText(hd.uptime && hd.uptime['24h'])), h('div', { class: 'muted sm-up-n' }, coverageNote(hd.uptime && hd.uptime['24h']))),
     h('div', { class: 'sm-up-cell' }, h('div', { class: 'sm-up-k' }, 'Uptime · 7d'), h('div', { class: 'sm-up-v' }, uptimeText(hd.uptime && hd.uptime['7d'])), h('div', { class: 'muted sm-up-n' }, coverageNote(hd.uptime && hd.uptime['7d']))));
@@ -603,10 +609,11 @@ function filteredServers() {
   return out;
 }
 
-function statusPill(s, liveKey) {
+function statusPill(s, liveKey, tip = true) {
   const map = { running: 'badge-green', provision: 'badge-blue', provisioning: 'badge-blue', maintenance: 'badge-blue', suspended: 'badge-amber', stopped: 'badge-gray' };
   const key = String(s || '').toLowerCase();
-  const props = { class: `badge ${map[key] || 'badge-amber'}`, title: 'Status is whether the server answered over SSH (not application health)' };
+  const props = { class: tip ? `badge tip-long ${map[key] || 'badge-amber'}` : `badge ${map[key] || 'badge-amber'}` };
+  if (tip) props['data-tip'] = 'Status is whether the server answered over SSH (not application health)';
   if (liveKey) props['data-live'] = liveKey;
   return h('span', props, s || 'unknown');
 }
@@ -640,7 +647,7 @@ function serversView() {
     h('td', {}, s.os || '—'),
     h('td', { class: 'mono' }, s.publicIp || h('span', { class: 'muted' }, 'none')),
     h('td', { class: 'mono' }, s.internalIp || h('span', { class: 'muted' }, '—')),
-    h('td', {}, statusPill(s.status, s === (state.servers && state.servers[0]) ? 'r-status' : null)),
+    h('td', {}, statusPill(s.status, s === (state.servers && state.servers[0]) ? 'r-status' : null, false)),
     h('td', { 'data-live': s === (state.servers && state.servers[0]) ? 'r-uptime' : null }, (s.metrics && humanUptime(s.metrics.uptimeSeconds)) || '—')));
 
   const table = servers.length
