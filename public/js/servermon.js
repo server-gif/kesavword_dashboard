@@ -84,17 +84,46 @@ async function refreshNow() {
 // The live re-read interval, changeable right from the toolbar (same setting as in Settings — the
 // choice is saved to the server, so it also applies to the next visit and the Settings page).
 const INTERVAL_CHOICES = [[30, 'every 30s'], [60, 'every 1 min'], [120, 'every 2 min'], [180, 'every 3 min'], [300, 'every 5 min']];
+// A small custom dropdown: the native <select> popup is drawn by the browser and can't be themed
+// (that bright highlight box), so we use a plain button + a themed menu that matches the dashboard.
+let openInterval = null; // { wrap, menu, btn } while the picker is showing
+function closeIntervalMenu() {
+  if (!openInterval) return;
+  openInterval.menu.hidden = true;
+  openInterval.btn.setAttribute('aria-expanded', 'false');
+  openInterval = null;
+  document.removeEventListener('pointerdown', onIntervalOutside, true);
+  document.removeEventListener('keydown', onIntervalKey, true);
+}
+function onIntervalOutside(e) { if (openInterval && !openInterval.wrap.contains(e.target)) closeIntervalMenu(); }
+function onIntervalKey(e) { if (e.key === 'Escape') closeIntervalMenu(); }
 function intervalSelect() {
   const cur = Number(state.settings && state.settings.refreshSeconds) || 60;
   const choices = INTERVAL_CHOICES.map(([v, l]) => [v, l]);
   if (!choices.some(([v]) => v === cur)) { choices.push([cur, `every ${cur}s`]); choices.sort((a, b) => a[0] - b[0]); }
-  return h('select', {
-    class: 'select live-interval',
-    title: 'How often the reading is re-checked live over SSH (saved in Monitoring settings)',
-    onchange: (e) => setRefreshSeconds(Number(e.target.value)),
-  }, ...choices.map(([v, l]) => h('option', { value: String(v), selected: v === cur }, l)));
+  const labelFor = (v) => (choices.find(([cv]) => cv === v) || choices[0])[1];
+  const menu = h('div', { class: 'sm-menu', role: 'listbox', hidden: true },
+    ...choices.map(([v, l]) => h('button', {
+      class: `sm-menu-item${v === cur ? ' sel' : ''}`, type: 'button', role: 'option', 'aria-selected': v === cur,
+      onclick: () => { closeIntervalMenu(); setRefreshSeconds(v, labelFor(v)); },
+    }, l, v === cur ? icon('check', 13) : null)));
+  const btn = h('button', {
+    class: 'live-interval', type: 'button',
+    'data-tip': 'How often the reading is re-checked live over SSH \u2014 saved in Monitoring settings',
+    'aria-haspopup': 'listbox', 'aria-expanded': 'false',
+    onclick: () => {
+      if (openInterval && openInterval.menu === menu) { closeIntervalMenu(); return; }
+      closeIntervalMenu();
+      menu.hidden = false; btn.setAttribute('aria-expanded', 'true');
+      openInterval = { wrap, menu, btn };
+      document.addEventListener('pointerdown', onIntervalOutside, true);
+      document.addEventListener('keydown', onIntervalKey, true);
+    },
+  }, h('span', { 'data-live': 'interval-label' }, labelFor(cur)), icon('chevron', 13));
+  const wrap = h('div', { class: 'live-interval-wrap' }, btn, menu);
+  return wrap;
 }
-async function setRefreshSeconds(n) {
+async function setRefreshSeconds(n, label) {
   const s = state.settings || {};
   try {
     const saved = await api('PUT', `/api/${S}/settings`, {
@@ -104,6 +133,7 @@ async function setRefreshSeconds(n) {
       notify: { email: Boolean(s.notify && s.notify.email) },
     });
     state.settings = saved;
+    if (label) setLive('interval-label', label); // reflect the new choice on the trigger right away
     toast(`Live refresh set to every ${saved.refreshSeconds >= 60 ? `${saved.refreshSeconds / 60} min` : `${saved.refreshSeconds}s`}`);
     if (state.live && canLive()) startLive(); // re-arm the schedule at the new interval right away
     else syncLiveChrome();
@@ -136,6 +166,7 @@ function metaBanners() {
 }
 
 function draw(content) {
+  closeIntervalMenu(); // an open picker belongs to the previous DOM; drop it before replacing
   const root = $('view-servermon');
   const prev = root.querySelector('.sm-body')?.scrollTop || 0;
   root.replaceChildren(toolbar(), h('div', { class: 'sm-body' }, ...content));
